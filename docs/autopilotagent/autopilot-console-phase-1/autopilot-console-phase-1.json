@@ -818,15 +818,15 @@
         "test": {
           "description": "Write database-backed authentication tests first for one-admin bootstrap, weak password rejection, hash-only storage, login success/failure, opaque token storage, cookie flags, expiration/revocation/logout, rate limits with fake time, CSRF acceptance/rejection, and redaction.",
           "file": "apps/api/src/auth/auth.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement password bootstrap/hashing, session lifecycle, secure cookie construction, rate limiting, and CSRF services against transaction-scoped database repositories.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Centralize secret-safe comparisons and time injection, remove duplicated session queries, and rerun authentication tests in isolation and full-suite order.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -834,7 +834,7 @@
         "Inspect database rows and logs to confirm no plaintext password or raw token is persisted.",
         "Verify production and development cookie attributes separately."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "13",
@@ -884,15 +884,15 @@
         "test": {
           "description": "Write transaction-backed project service tests with fake Git, GitHub, and Autopilot adapters for every validation failure, successful save, uniqueness, protected active-job edits, archival, redaction, and audit rollback; verify they fail before the service.",
           "file": "packages/domain/src/project/project-service.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement project entities, validation orchestration, transactional create/update/archive commands, repository operations, and audit emission using the existing narrow adapters.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Make validation checks independently testable while preserving one aggregate result, consolidate protected-field policy, and rerun rollback plus adapter-error cases.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -900,7 +900,7 @@
         "Attempt duplicate canonical paths through symlink aliases and confirm rejection.",
         "Confirm archival leaves all historical foreign-key records queryable."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "14",
