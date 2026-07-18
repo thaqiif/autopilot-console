@@ -90,3 +90,15 @@ export {
 	type ReleaseServiceOptions,
 	type UpdateReleaseResult,
 } from "./release/release-service";
+export {
+	type ApprovalResult,
+	type ApproveAndQueueResult,
+	type AttachTaskResult,
+	type AttemptResult,
+	createTaskApprovalService,
+	type InvalidateApprovalResult,
+	type RemoveTaskResult,
+	type TaskApprovalService,
+	type TaskApprovalServiceOptions,
+	type TaskArtifactFailureReason,
+} from "./task/task-approval-service";
