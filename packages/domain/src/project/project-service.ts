@@ -3,7 +3,7 @@
  */
 
 import type { AutopilotRunner } from "../../../autopilot/src/index";
-import type { Queryable, TransactionSql } from "../../../database/src/client";
+import type { Queryable } from "../../../database/src/client";
 import {
 	appendAuditEvent,
 	archiveProject as archiveProjectRow,
@@ -30,6 +30,7 @@ import {
 	type RepositoryIdentity,
 } from "../../../shared/src/git/repository-identity";
 import { redactSecrets, redactValue } from "../../../shared/src/security/redaction";
+import { isUniqueViolation, withTransaction } from "../shared/transaction";
 import type { Project, ProjectActor } from "./project";
 import {
 	aggregateValidationOk,
@@ -108,10 +109,6 @@ export interface ProjectService {
 	}): Promise<UpdateProjectResult>;
 	archiveProject(input: { projectId: string; actor: ProjectActor }): Promise<ArchiveProjectResult>;
 }
-
-type TxCapable = Queryable & {
-	begin?: <T>(fn: (tx: TransactionSql) => Promise<T>) => Promise<T>;
-};
 
 function mapRow(row: ProjectRow): Project {
 	return {
@@ -389,20 +386,6 @@ async function findUniquenessConflict(
 		return uniquenessMessage("canonical path");
 	}
 	return null;
-}
-
-function isUniqueViolation(err: unknown): boolean {
-	if (!err || typeof err !== "object") return false;
-	const e = err as { code?: string; message?: string };
-	return e.code === "23505" || /unique|duplicate/i.test(e.message ?? "");
-}
-
-async function withTransaction<T>(sql: Queryable, fn: (tx: Queryable) => Promise<T>): Promise<T> {
-	const capable = sql as TxCapable;
-	if (typeof capable.begin === "function") {
-		return capable.begin((tx) => fn(tx));
-	}
-	return fn(sql);
 }
 
 function projectSnapshot(project: Project): Record<string, unknown> {

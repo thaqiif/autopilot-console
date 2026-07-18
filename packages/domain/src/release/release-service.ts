@@ -2,7 +2,7 @@
  * Transactional release planning: create/update/archive, progress, audit (F-3).
  */
 
-import type { Queryable, TransactionSql } from "../../../database/src/client";
+import type { Queryable } from "../../../database/src/client";
 import {
 	appendActivityEvent,
 	appendAuditEvent,
@@ -19,6 +19,7 @@ import {
 	updateRelease as updateReleaseRow,
 } from "../../../database/src/index";
 import type { ProjectActor } from "../project/project";
+import { isUniqueViolation, withTransaction } from "../shared/transaction";
 import { computeDevelopmentProgress, type DevelopmentProgress } from "./development-progress";
 import type { Release } from "./release";
 
@@ -72,10 +73,6 @@ export interface ReleaseService {
 	getReleaseProgress(input: { releaseId: string }): Promise<ReleaseProgressResult>;
 }
 
-type TxCapable = Queryable & {
-	begin?: <T>(fn: (tx: TransactionSql) => Promise<T>) => Promise<T>;
-};
-
 function mapRow(row: ReleaseRow): Release {
 	return {
 		id: row.id,
@@ -102,20 +99,6 @@ function releaseSnapshot(release: Release): Record<string, unknown> {
 		status: release.status,
 		archivedAt: release.archivedAt?.toISOString() ?? null,
 	};
-}
-
-function isUniqueViolation(err: unknown): boolean {
-	if (!err || typeof err !== "object") return false;
-	const e = err as { code?: string; message?: string };
-	return e.code === "23505" || /unique|duplicate/i.test(e.message ?? "");
-}
-
-async function withTransaction<T>(sql: Queryable, fn: (tx: Queryable) => Promise<T>): Promise<T> {
-	const capable = sql as TxCapable;
-	if (typeof capable.begin === "function") {
-		return capable.begin((tx) => fn(tx));
-	}
-	return fn(sql);
 }
 
 export function createReleaseService(options: ReleaseServiceOptions): ReleaseService {

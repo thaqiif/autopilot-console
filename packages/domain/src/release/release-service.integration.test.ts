@@ -1,8 +1,6 @@
 /**
- * RED: release + feature planning services — create, uniqueness, branches,
+ * Release + feature planning services — create, uniqueness, branches,
  * development progress, archive guards, activity/audit atomicity.
- *
- * Fails until release-service and feature-service exist.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";

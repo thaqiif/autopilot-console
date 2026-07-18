@@ -2,7 +2,7 @@
  * Transactional feature planning: create/update, ownership guards, audit (F-4).
  */
 
-import type { Queryable, TransactionSql } from "../../../database/src/client";
+import type { Queryable } from "../../../database/src/client";
 import {
 	appendActivityEvent,
 	appendAuditEvent,
@@ -16,6 +16,7 @@ import {
 } from "../../../database/src/index";
 import { generateFeatureBranch, sanitizeSlug } from "../../../shared/src/git/feature-branch";
 import type { ProjectActor } from "../project/project";
+import { isUniqueViolation, withTransaction } from "../shared/transaction";
 import type { Feature } from "./feature";
 
 export type FeatureMutationFailureReason =
@@ -59,10 +60,6 @@ export interface FeatureService {
 	getFeature(input: { featureId: string }): Promise<Feature | null>;
 }
 
-type TxCapable = Queryable & {
-	begin?: <T>(fn: (tx: TransactionSql) => Promise<T>) => Promise<T>;
-};
-
 function mapRow(row: FeatureRow): Feature {
 	return {
 		id: row.id,
@@ -96,24 +93,10 @@ function featureSnapshot(feature: Feature): Record<string, unknown> {
 	};
 }
 
-function isUniqueViolation(err: unknown): boolean {
-	if (!err || typeof err !== "object") return false;
-	const e = err as { code?: string; message?: string };
-	return e.code === "23505" || /unique|duplicate/i.test(e.message ?? "");
-}
-
 function isCrossProjectViolation(err: unknown): boolean {
 	if (!err || typeof err !== "object") return false;
 	const e = err as { message?: string };
 	return /release .* does not belong to project|does not exist/i.test(e.message ?? "");
-}
-
-async function withTransaction<T>(sql: Queryable, fn: (tx: Queryable) => Promise<T>): Promise<T> {
-	const capable = sql as TxCapable;
-	if (typeof capable.begin === "function") {
-		return capable.begin((tx) => fn(tx));
-	}
-	return fn(sql);
 }
 
 function normalizeSlug(raw: string): string {
