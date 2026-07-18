@@ -164,12 +164,12 @@ export function createProgressObserver(
 		},
 
 		async appendDiagnostic(stream, body) {
-			const max = maxDiagnosticBytes;
-			const marker = TRUNCATION_MARKER;
 			const raw = Buffer.from(body ?? "", "utf8");
-			const keep = Math.max(0, max - Buffer.byteLength(marker, "utf8"));
-			const truncated = raw.byteLength > max;
-			const safeBody = truncated ? `${raw.subarray(0, keep).toString("utf8")}${marker}` : body;
+			const keep = Math.max(0, maxDiagnosticBytes - Buffer.byteLength(TRUNCATION_MARKER, "utf8"));
+			const truncated = raw.byteLength > maxDiagnosticBytes;
+			const safeBody = truncated
+				? `${raw.subarray(0, keep).toString("utf8")}${TRUNCATION_MARKER}`
+				: body;
 
 			diagSequence += 1;
 			const chunk: DiagnosticLogChunkRow = {
