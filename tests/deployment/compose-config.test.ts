@@ -82,10 +82,13 @@ describe("service separation", () => {
 			expect(build).toContain("apps/web");
 		} else {
 			const context = (build as Record<string, unknown>).context as string;
-			expect(context).toContain("apps/web");
 			const dockerfile = (build as Record<string, unknown>).dockerfile as string | undefined;
-			if (dockerfile) {
-				expect(dockerfile).toMatch(/Dockerfile/i);
+			// Monorepo builds use root context with specific dockerfile path
+			if (context === "." || context === "./") {
+				expect(dockerfile).toBeDefined();
+				expect(dockerfile!).toContain("apps/web");
+			} else {
+				expect(context).toContain("apps/web");
 			}
 		}
 	});
@@ -99,7 +102,13 @@ describe("service separation", () => {
 			expect(build).toContain("apps/api");
 		} else {
 			const context = (build as Record<string, unknown>).context as string;
-			expect(context).toContain("apps/api");
+			const dockerfile = (build as Record<string, unknown>).dockerfile as string | undefined;
+			if (context === "." || context === "./") {
+				expect(dockerfile).toBeDefined();
+				expect(dockerfile!).toContain("apps/api");
+			} else {
+				expect(context).toContain("apps/api");
+			}
 		}
 	});
 
@@ -112,7 +121,13 @@ describe("service separation", () => {
 			expect(build).toContain("apps/worker");
 		} else {
 			const context = (build as Record<string, unknown>).context as string;
-			expect(context).toContain("apps/worker");
+			const dockerfile = (build as Record<string, unknown>).dockerfile as string | undefined;
+			if (context === "." || context === "./") {
+				expect(dockerfile).toBeDefined();
+				expect(dockerfile!).toContain("apps/worker");
+			} else {
+				expect(context).toContain("apps/worker");
+			}
 		}
 	});
 
@@ -140,7 +155,7 @@ describe("health checks and dependency ordering", () => {
 	test("api depends_on postgres with condition service_healthy", () => {
 		const services = getServices(readCompose());
 		const api = services.api as Record<string, unknown>;
-		const dependsOn = (api.depends_on ?? api["depends_on"]) as
+		const dependsOn = (api.depends_on ?? api.depends_on) as
 			| Record<string, unknown>
 			| string[]
 			| undefined;
@@ -161,7 +176,7 @@ describe("health checks and dependency ordering", () => {
 	test("worker depends_on postgres with condition service_healthy", () => {
 		const services = getServices(readCompose());
 		const worker = services.worker as Record<string, unknown>;
-		const dependsOn = (worker.depends_on ?? worker["depends_on"]) as
+		const dependsOn = (worker.depends_on ?? worker.depends_on) as
 			| Record<string, unknown>
 			| string[]
 			| undefined;
@@ -182,7 +197,7 @@ describe("health checks and dependency ordering", () => {
 	test("web depends_on api", () => {
 		const services = getServices(readCompose());
 		const web = services.web as Record<string, unknown>;
-		const dependsOn = (web.depends_on ?? web["depends_on"]) as
+		const dependsOn = (web.depends_on ?? web.depends_on) as
 			| Record<string, unknown>
 			| string[]
 			| undefined;
@@ -216,8 +231,8 @@ describe("persistent volumes", () => {
 		const pg = services.postgres as Record<string, unknown>;
 		const volumes = pg.volumes as Array<string | Record<string, unknown>> | undefined;
 		expect(volumes).toBeDefined();
-		expect(volumes!.length).toBeGreaterThan(0);
-		const hasDataMount = volumes!.some((v) => {
+		expect(volumes?.length).toBeGreaterThan(0);
+		const hasDataMount = volumes?.some((v) => {
 			if (typeof v === "string") return v.includes("/var/lib/postgresql/data");
 			const target = (v as Record<string, unknown>).target as string;
 			return target?.includes("/var/lib/postgresql/data");
@@ -250,7 +265,7 @@ describe("workspace mount isolation", () => {
 		const worker = services.worker as Record<string, unknown>;
 		const volumes = worker.volumes as Array<string | Record<string, unknown>> | undefined;
 		expect(volumes).toBeDefined();
-		expect(volumes!.length).toBeGreaterThan(0);
+		expect(volumes?.length).toBeGreaterThan(0);
 	});
 
 	test("web service does NOT have a host workspace mount", () => {
@@ -272,15 +287,11 @@ describe("workspace mount isolation", () => {
 		const hasWritableWorkspaceMount = volumes.some((v) => {
 			if (typeof v === "string") {
 				// A writable bind mount has no :ro suffix and points to a source tree
-				return (
-					(v.includes("/workspace") || v.includes("/projects")) && !v.includes(":ro")
-				);
+				return (v.includes("/workspace") || v.includes("/projects")) && !v.includes(":ro");
 			}
 			const target = (v as Record<string, unknown>).target as string;
 			const readOnly = (v as Record<string, unknown>).read_only as boolean | undefined;
-			return (
-				(target?.includes("/workspace") || target?.includes("/projects")) && !readOnly
-			);
+			return (target?.includes("/workspace") || target?.includes("/projects")) && !readOnly;
 		});
 		expect(hasWritableWorkspaceMount).toBe(false);
 	});
@@ -292,7 +303,7 @@ describe("workspace mount isolation", () => {
 
 describe("secret and credential handling", () => {
 	test("compose references secrets or environment variables for database credentials", () => {
-		const compose = readCompose();
+		const _compose = readCompose();
 		const raw = readFile("compose.yaml");
 		// Database credentials must come from env, not hardcoded
 		expect(raw).not.toMatch(/POSTGRES_PASSWORD:\s*[a-zA-Z0-9]{8,}/);

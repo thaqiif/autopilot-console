@@ -88,4 +88,23 @@ export {
 	childCorrelation,
 	createCorrelationId,
 } from "./observability/correlation";
+export {
+	type AdapterMetrics,
+	type AttentionMetrics,
+	createMetricsCollector,
+	type JobMetrics,
+	type MetricsCollector,
+	type MetricsCollectorOptions,
+	type MetricsSnapshot,
+	type QueueMetrics,
+	type WorkerMetrics,
+} from "./observability/metrics";
+export {
+	createStructuredLogger,
+	type LogContext,
+	type LogLevel,
+	type StructuredLogEntry,
+	type StructuredLogger,
+	type StructuredLoggerOptions,
+} from "./observability/structured-logger";
 export { redactSecrets, redactValue } from "./security/redaction";
