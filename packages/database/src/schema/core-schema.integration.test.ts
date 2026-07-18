@@ -2,16 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-	createDatabaseClient,
-	type DatabaseClient,
-	type Sql,
-} from "../client";
-import {
-	applyCoreMigration,
-	rollbackCoreMigration,
-} from "../schema/core";
-import { createDatabaseFixture, type DatabaseFixture } from "../testing/database-fixture";
+import { createDatabaseClient, type DatabaseClient, type Sql } from "../client";
 import {
 	createAdminAccount,
 	createFeature,
@@ -23,6 +14,8 @@ import {
 	createWorkspace,
 	getWorkspace,
 } from "../repositories/core-repositories";
+import { applyCoreMigration, rollbackCoreMigration } from "../schema/core";
+import { createDatabaseFixture, type DatabaseFixture } from "../testing/database-fixture";
 
 const DATABASE_URL =
 	process.env.DATABASE_URL ??
@@ -35,24 +28,55 @@ let client: DatabaseClient;
 let sql: Sql;
 let fixture: DatabaseFixture;
 
+/** Assert promise rejects without relying on expect().rejects (postgres errors). */
+async function mustReject(run: () => Promise<unknown>): Promise<Error> {
+	try {
+		await run();
+	} catch (error) {
+		return error as Error;
+	}
+	throw new Error("expected operation to reject");
+}
+
 beforeAll(async () => {
 	client = createDatabaseClient(DATABASE_URL);
 	sql = client.sql;
-	// Ensure a clean schema namespace for the suite.
 	await sql.unsafe("DROP SCHEMA IF EXISTS public CASCADE");
 	await sql.unsafe("CREATE SCHEMA public");
 	await sql.unsafe("GRANT ALL ON SCHEMA public TO postgres");
 	await sql.unsafe("GRANT ALL ON SCHEMA public TO public");
+	await applyCoreMigration(sql);
 });
 
 afterAll(async () => {
 	await client.end();
 });
 
+async function ensureCoreSchema(): Promise<void> {
+	const tables = await sql`
+		SELECT 1 FROM information_schema.tables
+		WHERE table_schema = 'public' AND table_name = 'workspaces'
+	`;
+	if (tables.length === 0) {
+		await applyCoreMigration(sql);
+	}
+}
+
 beforeEach(async () => {
-	// Roll back any partial state and re-apply migration for isolation.
-	await rollbackCoreMigration(sql).catch(() => undefined);
-	await applyCoreMigration(sql);
+	await ensureCoreSchema();
+	// Truncate data only — keep DDL stable for the suite.
+	await sql.unsafe(`
+		TRUNCATE TABLE
+			pull_requests,
+			task_approvals,
+			features,
+			releases,
+			projects,
+			sessions,
+			admin_accounts,
+			workspaces
+		RESTART IDENTITY CASCADE
+	`);
 	fixture = createDatabaseFixture(sql);
 });
 
@@ -62,7 +86,6 @@ describe("core schema migration", () => {
 		expect(files).toContain("0001_core_entities.sql");
 		const body = await readFile(join(migrationsDir, "0001_core_entities.sql"), "utf8");
 		expect(body.length).toBeGreaterThan(100);
-		// Re-apply after rollback in beforeEach already applied; second apply should be idempotent via tracking
 		await expect(applyCoreMigration(sql)).resolves.toBeUndefined();
 	});
 
@@ -116,12 +139,12 @@ describe("workspace and administrator", () => {
 		expect(row.password_hash).toBeDefined();
 		expect(JSON.stringify(row)).not.toContain("plaintext");
 		// unique username
-		await expect(
+		await mustReject(() =>
 			createAdminAccount(sql, {
 				username: "admin",
 				passwordHash: "$argon2id$other",
 			}),
-		).rejects.toThrow();
+		);
 	});
 
 	test("sessions are revocable and expire with timezone-aware UTC timestamps", async () => {
@@ -166,7 +189,7 @@ describe("project uniqueness and archival", () => {
 		});
 		expect(a.status).toBe("active");
 
-		await expect(
+		await mustReject(() =>
 			createProject(sql, {
 				workspaceId: ws.id,
 				name: "Alpha",
@@ -176,9 +199,9 @@ describe("project uniqueness and archival", () => {
 				canonicalPath: "/workspaces/alpha-2",
 				developmentBranch: "main",
 			}),
-		).rejects.toThrow();
+		);
 
-		await expect(
+		await mustReject(() =>
 			createProject(sql, {
 				workspaceId: ws.id,
 				name: "Alpha Two",
@@ -188,9 +211,9 @@ describe("project uniqueness and archival", () => {
 				canonicalPath: "/workspaces/alpha-2",
 				developmentBranch: "main",
 			}),
-		).rejects.toThrow();
+		);
 
-		await expect(
+		await mustReject(() =>
 			createProject(sql, {
 				workspaceId: ws.id,
 				name: "Alpha Three",
@@ -200,9 +223,9 @@ describe("project uniqueness and archival", () => {
 				canonicalPath: "/workspaces/alpha-3",
 				developmentBranch: "main",
 			}),
-		).rejects.toThrow();
+		);
 
-		await expect(
+		await mustReject(() =>
 			createProject(sql, {
 				workspaceId: ws.id,
 				name: "Alpha Four",
@@ -212,7 +235,7 @@ describe("project uniqueness and archival", () => {
 				canonicalPath: "/workspaces/alpha",
 				developmentBranch: "main",
 			}),
-		).rejects.toThrow();
+		);
 	});
 
 	test("archived projects preserve history and free uniqueness for a new active project", async () => {
@@ -256,14 +279,14 @@ describe("release and feature hierarchy uniqueness", () => {
 		});
 		expect(r1.projectId).toBe(projectA.id);
 
-		await expect(
+		await mustReject(() =>
 			createRelease(sql, {
 				projectId: projectA.id,
 				name: "1.0.0",
 				version: "1.0.0",
 				sortOrder: 2,
 			}),
-		).rejects.toThrow();
+		);
 
 		// Same name/version allowed on another project
 		const other = await createRelease(sql, {
@@ -299,7 +322,7 @@ describe("release and feature hierarchy uniqueness", () => {
 		expect(f1.slug).toBe("login");
 		expect(f1.state).toBe("PLANNED");
 
-		await expect(
+		await mustReject(() =>
 			createFeature(sql, {
 				projectId: projectA.id,
 				releaseId: rel2.id,
@@ -307,7 +330,7 @@ describe("release and feature hierarchy uniqueness", () => {
 				title: "Login again",
 				branchName: "feature/f2-login",
 			}),
-		).rejects.toThrow();
+		);
 	});
 
 	test("foreign keys prevent cross-project release/feature association", async () => {
@@ -319,7 +342,7 @@ describe("release and feature hierarchy uniqueness", () => {
 			sortOrder: 1,
 		});
 
-		await expect(
+		await mustReject(() =>
 			createFeature(sql, {
 				projectId: projectA.id,
 				releaseId: releaseB.id,
@@ -327,13 +350,17 @@ describe("release and feature hierarchy uniqueness", () => {
 				title: "Cross",
 				branchName: "feature/cross",
 			}),
-		).rejects.toThrow();
+		);
 	});
 });
 
 describe("task approvals and pull request identity", () => {
 	test("task approval snapshots are immutable and bound to project/feature hierarchy", async () => {
 		const { projectA, projectB, featureA } = await fixture.featureReady();
+		const admin = await createAdminAccount(sql, {
+			username: "owner",
+			passwordHash: "$argon2id$x",
+		});
 		const approval = await createTaskApproval(sql, {
 			projectId: projectA.id,
 			featureId: featureA.id,
@@ -341,21 +368,17 @@ describe("task approvals and pull request identity", () => {
 			checksum: "abc123",
 			schemaCompatibilityVersion: "1",
 			requirementsSnapshot: { requirements: [{ id: "1" }] },
-			approvedByAdminId: (await createAdminAccount(sql, {
-				username: "owner",
-				passwordHash: "$argon2id$x",
-			})).id,
+			approvedByAdminId: admin.id,
 		});
 		expect(approval.checksum).toBe("abc123");
 
-		// Cannot mutate snapshot columns
-		await expect(
-			sql`UPDATE task_approvals SET checksum = 'mutated' WHERE id = ${approval.id}`,
-		).rejects.toThrow();
+		const mutateErr = await mustReject(async () => {
+			await sql`UPDATE task_approvals SET checksum = ${"mutated"} WHERE id = ${approval.id}`;
+		});
+		expect(mutateErr.message).toContain("immutable");
 
-		// Cannot attach approval for feature in another project
 		const featureB = await fixture.featureInProject(projectB.id, "other");
-		await expect(
+		await mustReject(() =>
 			createTaskApproval(sql, {
 				projectId: projectA.id,
 				featureId: featureB.id,
@@ -365,7 +388,7 @@ describe("task approvals and pull request identity", () => {
 				requirementsSnapshot: { requirements: [] },
 				approvedByAdminId: approval.approvedByAdminId,
 			}),
-		).rejects.toThrow();
+		);
 	});
 
 	test("pull request identity fields are immutable separately from observations", async () => {
@@ -383,42 +406,42 @@ describe("task approvals and pull request identity", () => {
 		});
 		expect(pr.number).toBe(42);
 
-		// Identity immutable
-		await expect(
-			sql`UPDATE pull_requests SET number = 99 WHERE id = ${pr.id}`,
-		).rejects.toThrow();
-		await expect(
-			sql`UPDATE pull_requests SET head_branch = 'other' WHERE id = ${pr.id}`,
-		).rejects.toThrow();
-		await expect(
-			sql`UPDATE pull_requests SET url = 'https://evil.example/pr/1' WHERE id = ${pr.id}`,
-		).rejects.toThrow();
-		await expect(
-			sql`UPDATE pull_requests SET repository_owner = 'evil' WHERE id = ${pr.id}`,
-		).rejects.toThrow();
-		await expect(
-			sql`UPDATE pull_requests SET base_branch = 'develop' WHERE id = ${pr.id}`,
-		).rejects.toThrow();
-		await expect(
-			sql`UPDATE pull_requests SET original_head_sha = 'cafebabe' WHERE id = ${pr.id}`,
-		).rejects.toThrow();
+		const numberErr = await mustReject(async () => {
+			await sql`UPDATE pull_requests SET number = ${99} WHERE id = ${pr.id}`;
+		});
+		expect(numberErr.message).toContain("immutable");
+		await mustReject(async () => {
+			await sql`UPDATE pull_requests SET head_branch = ${"other"} WHERE id = ${pr.id}`;
+		});
+		await mustReject(async () => {
+			await sql`UPDATE pull_requests SET url = ${"https://evil.example/pr/1"} WHERE id = ${pr.id}`;
+		});
+		await mustReject(async () => {
+			await sql`UPDATE pull_requests SET repository_owner = ${"evil"} WHERE id = ${pr.id}`;
+		});
+		await mustReject(async () => {
+			await sql`UPDATE pull_requests SET base_branch = ${"develop"} WHERE id = ${pr.id}`;
+		});
+		await mustReject(async () => {
+			await sql`UPDATE pull_requests SET original_head_sha = ${"cafebabe"} WHERE id = ${pr.id}`;
+		});
 
-		// Observation columns remain mutable
 		await sql`
 			UPDATE pull_requests
 			SET observed_head_sha = ${"a".repeat(40)},
-			    observed_state = 'open',
+			    observed_state = ${"open"},
 			    last_observed_at = now()
 			WHERE id = ${pr.id}
 		`;
-		const observed = await sql`SELECT observed_head_sha, observed_state FROM pull_requests WHERE id = ${pr.id}`;
+		const observed =
+			await sql`SELECT observed_head_sha, observed_state FROM pull_requests WHERE id = ${pr.id}`;
 		expect(observed[0]?.observed_head_sha).toBe("a".repeat(40));
 		expect(observed[0]?.observed_state).toBe("open");
 	});
 
 	test("pull request cannot reference feature from another project", async () => {
-		const { projectA, projectB, featureA } = await fixture.featureReady();
-		await expect(
+		const { projectB, featureA } = await fixture.featureReady();
+		await mustReject(() =>
 			createPullRequestIdentity(sql, {
 				projectId: projectB.id,
 				featureId: featureA.id,
@@ -430,7 +453,7 @@ describe("task approvals and pull request identity", () => {
 				baseBranch: "main",
 				originalHeadSha: "b".repeat(40),
 			}),
-		).rejects.toThrow();
+		);
 	});
 });
 
@@ -451,8 +474,8 @@ describe("UTC timestamps and transaction isolation", () => {
 
 	test("transaction rollback leaves no partial domain mutation", async () => {
 		const ws = await createWorkspace(sql);
-		await expect(
-			sql.begin(async (tx) => {
+		const err = await mustReject(async () => {
+			await sql.begin(async (tx) => {
 				await createProject(tx as unknown as Sql, {
 					workspaceId: ws.id,
 					name: "RollbackMe",
@@ -463,8 +486,9 @@ describe("UTC timestamps and transaction isolation", () => {
 					developmentBranch: "main",
 				});
 				throw new Error("force rollback");
-			}),
-		).rejects.toThrow("force rollback");
+			});
+		});
+		expect(err.message).toContain("force rollback");
 
 		const count = await sql`SELECT count(*)::int AS n FROM projects WHERE slug = 'rollback-me'`;
 		expect(count[0]?.n).toBe(0);
