@@ -17,10 +17,7 @@ import type {
 	ProgressSummary,
 	TaskRequirementState,
 } from "../../../../packages/domain/src/progress/progress-summary";
-import {
-	createProgressObserver,
-	type ProgressObserver,
-} from "./progress-observer";
+import { createProgressObserver } from "./progress-observer";
 
 // ─── Fake store ─────────────────────────────────────────────────────────────
 
@@ -74,7 +71,10 @@ describe("progress observer", () => {
 		});
 
 		const reqs = makeFixture(3);
-		const snap = (await obs.snapshotTask({ requirements: reqs, sourceVersion: 1 })) as ProgressSnapshotRow;
+		const snap = (await obs.snapshotTask({
+			requirements: reqs,
+			sourceVersion: 1,
+		})) as ProgressSnapshotRow;
 
 		expect(snap.sourceVersion).toBe(1);
 		expect(snap.projectId).toBe(PROJECT_ID);
@@ -107,19 +107,25 @@ describe("progress observer", () => {
 			now: () => NOW,
 		});
 
-		const valid = (await obs.snapshotTask({ requirements: makeFixture(2), sourceVersion: 1 })) as ProgressSnapshotRow;
+		const valid = (await obs.snapshotTask({
+			requirements: makeFixture(2),
+			sourceVersion: 1,
+		})) as ProgressSnapshotRow;
 		expect(store.snapshots.length).toBe(1);
 
 		await expect(
-			obs.snapshotTask({ requirements: null as unknown as TaskRequirementState[], sourceVersion: 2 }),
+			obs.snapshotTask({
+				requirements: null as unknown as TaskRequirementState[],
+				sourceVersion: 2,
+			}),
 		).rejects.toThrow("malformed");
 
 		expect(store.snapshots.length).toBe(1);
-		expect(store.snapshots[0].id).toBe(valid.id);
+		expect(store.snapshots[0]?.id).toBe(valid.id);
 
 		const malformedEvents = store.activity.filter((e) => e.type === "progress.malformed");
 		expect(malformedEvents.length).toBe(1);
-		expect(malformedEvents[0].summary).toContain("malformed");
+		expect(malformedEvents[0]?.summary).toContain("malformed");
 	});
 
 	test("periodic snapshots accumulate and latest is queryable", async () => {
@@ -151,21 +157,33 @@ describe("progress observer", () => {
 
 		const reqs: TaskRequirementState[] = [
 			{
-				id: "1", description: "Base", passes: true, stuck: false, invalidTest: false,
+				id: "1",
+				description: "Base",
+				passes: true,
+				stuck: false,
+				invalidTest: false,
 				blockedReason: null,
 				tdd: { test: { passes: true }, implement: { passes: true }, refactor: { passes: true } },
 				dependsOn: [],
 				acceptance: ["works"],
 			},
 			{
-				id: "2", description: "Blocked", passes: false, stuck: true, invalidTest: false,
+				id: "2",
+				description: "Blocked",
+				passes: false,
+				stuck: true,
+				invalidTest: false,
 				blockedReason: "missing dep",
 				tdd: { test: { passes: true }, implement: { passes: false }, refactor: { passes: false } },
 				dependsOn: ["99"],
 				acceptance: ["works"],
 			},
 			{
-				id: "3", description: "Pending", passes: false, stuck: false, invalidTest: false,
+				id: "3",
+				description: "Pending",
+				passes: false,
+				stuck: false,
+				invalidTest: false,
 				blockedReason: null,
 				tdd: { test: { passes: false }, implement: { passes: false }, refactor: { passes: false } },
 				dependsOn: ["1"],
@@ -173,7 +191,10 @@ describe("progress observer", () => {
 			},
 		];
 
-		const snap = (await obs.snapshotTask({ requirements: reqs, sourceVersion: 1 })) as ProgressSnapshotRow;
+		const snap = (await obs.snapshotTask({
+			requirements: reqs,
+			sourceVersion: 1,
+		})) as ProgressSnapshotRow;
 		const s = summarise(snap);
 
 		expect(s.total).toBe(3);
@@ -184,7 +205,7 @@ describe("progress observer", () => {
 		expect(s.phaseSummary.green).toBe(1);
 		expect(s.phaseSummary.refactor).toBe(1);
 		expect(s.blockedReasons.length).toBe(1);
-		expect(s.blockedReasons[0].id).toBe("2");
+		expect(s.blockedReasons[0]?.id).toBe("2");
 		expect(s.dependencySummary.blocked).toBe(1);
 		expect(s.dependencySummary.ready).toBe(2);
 	});
@@ -223,7 +244,11 @@ describe("progress observer", () => {
 
 		await obs.deriveActivity({ type: "notes.updated", summary: "Notes updated" });
 		await obs.deriveActivity({ type: "analytics.updated", summary: "Analytics updated" });
-		await obs.deriveActivity({ type: "commit.detected", summary: "3 new commits", metadata: { commitCount: 3 } });
+		await obs.deriveActivity({
+			type: "commit.detected",
+			summary: "3 new commits",
+			metadata: { commitCount: 3 },
+		});
 
 		const types = store.activity.map((e) => e.type);
 		expect(types).toContain("notes.updated");
@@ -247,11 +272,11 @@ describe("progress observer", () => {
 		await obs.appendDiagnostic("stderr", "error 1\n");
 
 		expect(store.diagnostics.length).toBe(3);
-		expect(store.diagnostics[0].sequence).toBe(1);
-		expect(store.diagnostics[1].sequence).toBe(2);
-		expect(store.diagnostics[2].sequence).toBe(3);
-		expect(store.diagnostics[0].stream).toBe("stdout");
-		expect(store.diagnostics[2].stream).toBe("stderr");
+		expect(store.diagnostics[0]?.sequence).toBe(1);
+		expect(store.diagnostics[1]?.sequence).toBe(2);
+		expect(store.diagnostics[2]?.sequence).toBe(3);
+		expect(store.diagnostics[0]?.stream).toBe("stdout");
+		expect(store.diagnostics[2]?.stream).toBe("stderr");
 	});
 
 	test("diagnostic is bounded and truncated with marker", async () => {
@@ -309,10 +334,16 @@ describe("progress observer", () => {
 		expect(page1.items.length).toBe(2);
 		expect(page1.nextCursor).not.toBeNull();
 
-		const page2 = (await obs.listActivity({ limit: 2, cursor: page1.nextCursor! })) as ActivityPage;
+		const page2 = (await obs.listActivity({
+			limit: 2,
+			cursor: page1.nextCursor ?? undefined,
+		})) as ActivityPage;
 		expect(page2.items.length).toBe(2);
 
-		const page3 = (await obs.listActivity({ limit: 2, cursor: page2.nextCursor! })) as ActivityPage;
+		const page3 = (await obs.listActivity({
+			limit: 2,
+			cursor: page2.nextCursor ?? undefined,
+		})) as ActivityPage;
 		expect(page3.items.length).toBe(1);
 		expect(page3.nextCursor).toBeNull();
 
@@ -364,11 +395,11 @@ describe("progress observer", () => {
 
 		const activityPage = (await obs2.listActivity()) as ActivityPage;
 		expect(activityPage.items.length).toBe(1);
-		expect(activityPage.items[0].type).toBe("task.started");
+		expect(activityPage.items[0]?.type).toBe("task.started");
 
 		const diagnostics = (obs2.read() as { diagnostics: DiagnosticLogChunkRow[] }).diagnostics;
 		expect(diagnostics.length).toBe(1);
-		expect(diagnostics[0].body).toBe("starting...");
+		expect(diagnostics[0]?.body).toBe("starting...");
 	});
 
 	test("getLatestSnapshot returns null when no snapshots exist", async () => {
