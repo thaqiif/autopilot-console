@@ -155,28 +155,7 @@ export class CliAutopilotRunner implements AutopilotRunner {
 	}
 
 	async validateRuntime(): Promise<RuntimeValidation> {
-		const path = this.executablePath;
-		if (path.includes("/") || path.startsWith(".")) {
-			try {
-				await access(path, constants.X_OK);
-				return { ok: true, message: "executable present", executablePath: path };
-			} catch {
-				return {
-					ok: false,
-					message: `autopilotagent executable not found or not executable: ${path}`,
-					executablePath: path,
-				};
-			}
-		}
-		// bare name — check PATH
-		const which = Bun.which(path);
-		if (!which) {
-			return {
-				ok: false,
-				message: `autopilotagent executable not found on PATH: ${path}`,
-			};
-		}
-		return { ok: true, message: "executable present", executablePath: which };
+		return this.validateRuntimePath(this.executablePath, "executable present");
 	}
 
 	async validateTask(projectRoot: string, taskRelativePath: string): Promise<TaskValidation> {
@@ -262,32 +241,27 @@ export class CliAutopilotRunner implements AutopilotRunner {
 			lastValidProgress: pre,
 		};
 
-		child.stdout.on("data", (buf: Buffer) => {
-			live.stdout += buf.toString("utf8");
-			if (live.stdout.length > this.maxDiagnosticBytes * 4) {
-				live.stdout = live.stdout.slice(-this.maxDiagnosticBytes * 2);
-			}
+		child.stdout?.on("data", (buf: Buffer) => {
+			live.stdout = this.appendDiagnostic(live.stdout, buf);
 		});
-		child.stderr.on("data", (buf: Buffer) => {
-			live.stderr += buf.toString("utf8");
-			if (live.stderr.length > this.maxDiagnosticBytes * 4) {
-				live.stderr = live.stderr.slice(-this.maxDiagnosticBytes * 2);
-			}
+		child.stderr?.on("data", (buf: Buffer) => {
+			live.stderr = this.appendDiagnostic(live.stderr, buf);
 		});
 
 		this.lives.set(this.handleKey(handle), live);
 		return handle;
 	}
 
-	private async validateRuntimePath(path: string): Promise<RuntimeValidation> {
+	private async validateRuntimePath(path: string, okMessage = "ok"): Promise<RuntimeValidation> {
 		if (path.includes("/") || path.startsWith(".")) {
 			try {
 				await access(path, constants.X_OK);
-				return { ok: true, message: "ok", executablePath: path };
+				return { ok: true, message: okMessage, executablePath: path };
 			} catch {
 				return {
 					ok: false,
 					message: `autopilotagent executable not found or not executable: ${path}`,
+					executablePath: path,
 				};
 			}
 		}
@@ -298,7 +272,13 @@ export class CliAutopilotRunner implements AutopilotRunner {
 				message: `autopilotagent executable not found on PATH: ${path}`,
 			};
 		}
-		return { ok: true, message: "ok", executablePath: which };
+		return { ok: true, message: okMessage, executablePath: which };
+	}
+
+	private appendDiagnostic(current: string, chunk: Buffer): string {
+		const next = current + chunk.toString("utf8");
+		const cap = this.maxDiagnosticBytes * 4;
+		return next.length > cap ? next.slice(-this.maxDiagnosticBytes * 2) : next;
 	}
 
 	async isAlive(handle: AutopilotRunHandle): Promise<boolean> {
