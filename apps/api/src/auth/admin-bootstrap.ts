@@ -2,15 +2,15 @@
  * Bootstrap at most one administrator from deployment password config.
  */
 
-import type { Queryable } from "../../../../packages/database/src/client";
 import {
 	type AdminAccountRow,
 	countAdminAccounts,
 	createAdminAccount,
 	getAdminAccountByUsername,
+	type Queryable,
 	revokeSessionsForAdmin,
 	updateAdminPasswordHash,
-} from "../../../../packages/database/src/repositories/core-repositories";
+} from "../../../../packages/database/src/index";
 import { hashPassword } from "./password";
 
 export interface BootstrapAdminInput {

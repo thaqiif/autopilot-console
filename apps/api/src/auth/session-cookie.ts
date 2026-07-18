@@ -16,19 +16,21 @@ export interface BuildSessionCookieOptions {
 	path?: string;
 }
 
-export function buildSessionCookie(options: BuildSessionCookieOptions): string {
-	const path = options.path ?? "/";
-	const parts = [
-		`${SESSION_COOKIE_NAME}=${options.rawToken}`,
-		`Path=${path}`,
-		`Max-Age=${options.maxAgeSeconds}`,
-		"HttpOnly",
-		"SameSite=Strict",
-	];
-	if (options.nodeEnv === "production") {
+function cookieFlags(nodeEnv: "development" | "test" | "production", path: string): string[] {
+	const parts = [`Path=${path}`, "HttpOnly", "SameSite=Strict"];
+	if (nodeEnv === "production") {
 		parts.push("Secure");
 	}
-	return parts.join("; ");
+	return parts;
+}
+
+export function buildSessionCookie(options: BuildSessionCookieOptions): string {
+	const path = options.path ?? "/";
+	return [
+		`${SESSION_COOKIE_NAME}=${options.rawToken}`,
+		`Max-Age=${options.maxAgeSeconds}`,
+		...cookieFlags(options.nodeEnv, path),
+	].join("; ");
 }
 
 export function clearSessionCookie(options: {
@@ -36,17 +38,7 @@ export function clearSessionCookie(options: {
 	path?: string;
 }): string {
 	const path = options.path ?? "/";
-	const parts = [
-		`${SESSION_COOKIE_NAME}=`,
-		`Path=${path}`,
-		"Max-Age=0",
-		"HttpOnly",
-		"SameSite=Strict",
-	];
-	if (options.nodeEnv === "production") {
-		parts.push("Secure");
-	}
-	return parts.join("; ");
+	return [`${SESSION_COOKIE_NAME}=`, "Max-Age=0", ...cookieFlags(options.nodeEnv, path)].join("; ");
 }
 
 /** Extract the named session cookie from a Cookie header. */

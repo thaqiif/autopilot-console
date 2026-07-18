@@ -1,48 +1,42 @@
 # autopilot-console-phase-1 Progress Notes
 
 ## Current State
-- Last completed: requirement 10
+- Last completed: requirement 12
 - Working on: none (batch 1 complete)
 - Blockers: none
 
 ## Files Modified
-- packages/git/src/git-gateway.ts
-- packages/git/src/cli-git-gateway.ts
-- packages/git/src/cli-runner.ts
-- packages/git/src/preflight.ts
-- packages/git/src/branch-workflow.ts
-- packages/git/src/commit-observer.ts
-- packages/git/src/safe-push.ts
-- packages/git/src/errors.ts
-- packages/git/src/index.ts
-- packages/git/src/git-safety.integration.test.ts
-- packages/git/src/testing/temp-repository.ts
+- apps/api/src/auth/admin-bootstrap.ts
+- apps/api/src/auth/password.ts
+- apps/api/src/auth/session-service.ts
+- apps/api/src/auth/session-cookie.ts
+- apps/api/src/auth/csrf.ts
+- apps/api/src/auth/login-rate-limit.ts
+- apps/api/src/auth/auth.integration.test.ts
+- apps/api/src/index.ts
+- packages/database/src/repositories/core-repositories.ts
+- packages/database/src/index.ts
 
 ## Progress
 
-### Requirement 1–9
+### Requirement 1–11
 - Completed: 2026-07-18 (prior sessions)
 
-### Requirement 10: Constrained GitGateway (preflight, branch, observe, push)
-- Started: 2026-07-18T01:33:25Z
+### Requirement 12: Admin bootstrap auth, sessions, CSRF, rate limits
+- Started: 2026-07-18T01:47:49Z
 - Completed: 2026-07-18
 - Commits:
-  - 35d0906 test(git): add failing GitGateway safety integration suite
-  - 088cf7d feat(git): implement constrained GitGateway CLI adapter
-  - e2a57ef refactor(git): share error helpers and branch-existence checks
+  - 63ee55b test(api): add failing auth bootstrap session CSRF suite
+  - cf9200c feat(api): implement admin bootstrap, sessions, CSRF, rate limits
+  - (refactor) centralize cookie flags, package index imports, dummy hash constant
 - Files Changed:
-  - packages/git/src/git-gateway.ts — narrow GitGateway port
-  - packages/git/src/cli-runner.ts — fixed argv, shell false, forbidden force/hard flags
-  - packages/git/src/preflight.ts — remote identity via config URL, dirty/task checks
-  - packages/git/src/branch-workflow.ts — create from remote tip / reuse without reset
-  - packages/git/src/commit-observer.ts — bounded log on feature branch
-  - packages/git/src/safe-push.ts — non-force idempotent push
-  - packages/git/src/testing/temp-repository.ts — local bare + github-shaped insteadOf
+  - apps/api/src/auth/* — password, bootstrap, session service, cookie, CSRF, rate limit
+  - packages/database — admin/session lookup/revoke/update helpers
 - Learnings:
-  - `git remote get-url` resolves `url.*.insteadOf`; use `git config --get remote.<name>.url` for configured identity.
-  - Fixture remotes: set github HTTPS origin + `url.<bare>.insteadOf` for offline push/fetch.
-  - Feature branch shape `feature/<id>-<slug>` needs hyphen after id; tests must use valid names for absence cases.
+  - Bun.password.hash/verify with argon2id is sufficient; no extra deps.
+  - Session raw token only returned at login; DB stores SHA-256 hex of token.
+  - Login failures share one message; rate limit is keyed by clientKey + fake clock.
 
 ## Session Log
-- [2026-07-18T01:33:25Z] Started requirement 10
-- [2026-07-18] Completed requirement 10 (batch 1)
+- [2026-07-18T01:47:49Z] Started requirement 12
+- [2026-07-18] Completed requirement 12 (batch 1)

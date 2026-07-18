@@ -751,15 +751,15 @@
         "test": {
           "description": "Create a fake gh boundary and failing tests for auth/repository validation, existing PR lookup, creation, malformed JSON, head changes, pending/passing/failing current-head checks, requested changes, close, merge, redaction, and absence of merge operations.",
           "file": "packages/github/src/gh-cli-gateway.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement the typed GitHubGateway, fixed gh argv commands requesting explicit JSON fields, response schemas, and normalized status/error mapping.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Deduplicate gh execution and schema validation, make status mapping exhaustive and current-head-aware, and rerun adapter tests with credential-bearing error fixtures.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -767,7 +767,7 @@
         "Inspect command fixtures and confirm every status command requests machine-readable JSON.",
         "Search the gateway API and implementation to confirm no approve or merge operation exists."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "12",

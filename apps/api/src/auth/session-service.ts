@@ -4,7 +4,6 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import type { Queryable } from "../../../../packages/database/src/client";
 import {
 	type AdminAccountRow,
 	createSession,
@@ -12,14 +11,18 @@ import {
 	getAdminAccountByUsername,
 	getSessionById,
 	getSessionByTokenHash,
+	type Queryable,
 	revokeSessionById,
 	type SessionRow,
-} from "../../../../packages/database/src/repositories/core-repositories";
+} from "../../../../packages/database/src/index";
 import type { LoginRateLimiter } from "./login-rate-limit";
 import { verifyPassword } from "./password";
 
 const DEFAULT_TTL_MS = 12 * 60 * 60 * 1000; // 12h
 const AUTH_FAILURE_MESSAGE = "Invalid credentials";
+// Precomputed argon2id of a constant so missing-user logins still pay verify cost.
+const DUMMY_PASSWORD_HASH =
+	"$argon2id$v=19$m=65536,t=2,p=1$9F0tBy9LR6vm64N7D8gWNvd35+ZIpCQsSevxuZVYigk$qrOy35OvqDBMFASlOTS7EicSjEveGxCalc+40MIA9ZI";
 
 export type LoginFailureCode = "UNAUTHORIZED" | "RATE_LIMITED";
 
@@ -91,14 +94,11 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
 			}
 
 			const admin = await getAdminAccountByUsername(sql, input.username.trim());
-			// Always verify against a dummy hash path when admin missing to reduce timing leaks.
-			const passwordOk = admin
-				? await verifyPassword(input.password, admin.passwordHash)
-				: await verifyPassword(
-						input.password,
-						// Fixed argon2id of "not-a-real-password-xx!" — verification fails, burns similar time.
-						"$argon2id$v=19$m=65536,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-					).catch(() => false);
+			// Always verify (dummy hash when admin missing) to reduce timing leaks.
+			const passwordOk = await verifyPassword(
+				input.password,
+				admin?.passwordHash ?? DUMMY_PASSWORD_HASH,
+			);
 
 			if (!admin || !passwordOk) {
 				rateLimiter?.recordFailure(clientKey);
