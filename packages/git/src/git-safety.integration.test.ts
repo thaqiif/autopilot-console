@@ -158,7 +158,11 @@ describe("preflight", () => {
 		const g = gateway();
 
 		await writeFile(join(repo.path, "unrelated.txt"), "dirty\n", "utf8");
-		await writeFile(join(repo.path, "docs/tasks/demo.json"), '{"requirements":[{"id":"1"}]}\n', "utf8");
+		await writeFile(
+			join(repo.path, "docs/tasks/demo.json"),
+			'{"requirements":[{"id":"1"}]}\n',
+			"utf8",
+		);
 
 		const dirty = await g.preflight({
 			projectRoot: repo.path,
@@ -175,7 +179,11 @@ describe("preflight", () => {
 
 		// Remove unrelated untracked; leave only task dirty.
 		git(repo.path, ["clean", "-fd"]);
-		await writeFile(join(repo.path, "docs/tasks/demo.json"), '{"requirements":[{"id":"1"}]}\n', "utf8");
+		await writeFile(
+			join(repo.path, "docs/tasks/demo.json"),
+			'{"requirements":[{"id":"1"}]}\n',
+			"utf8",
+		);
 		const taskOnly = await g.preflight({
 			projectRoot: repo.path,
 			remoteName: "origin",
@@ -314,7 +322,7 @@ describe("ensureFeatureBranch", () => {
 				projectRoot: repo.path,
 				remoteName: "origin",
 				developmentBranch: repo.developmentBranch,
-				featureBranch: "feature/missing",
+				featureBranch: "feature/feat-1-missing",
 				createIfMissing: false,
 			}),
 		).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
