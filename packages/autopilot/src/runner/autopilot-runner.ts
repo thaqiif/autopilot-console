@@ -52,20 +52,11 @@ export interface WaitOptions {
 
 export interface AutopilotRunner {
 	validateRuntime(): Promise<RuntimeValidation>;
-	validateTask(
-		projectRoot: string,
-		taskRelativePath: string,
-	): Promise<TaskValidation>;
+	validateTask(projectRoot: string, taskRelativePath: string): Promise<TaskValidation>;
 	start(request: AutopilotStartRequest): Promise<AutopilotRunHandle>;
 	isAlive(handle: AutopilotRunHandle): Promise<boolean>;
 	signal(handle: AutopilotRunHandle, kind: SignalKind): Promise<void>;
-	wait(
-		handle: AutopilotRunHandle,
-		options?: WaitOptions,
-	): Promise<NormalizedRunResult>;
-	readProgress(
-		projectRoot: string,
-		taskRelativePath: string,
-	): Promise<ProgressSnapshot>;
+	wait(handle: AutopilotRunHandle, options?: WaitOptions): Promise<NormalizedRunResult>;
+	readProgress(projectRoot: string, taskRelativePath: string): Promise<ProgressSnapshot>;
 	observeCommits(handle: AutopilotRunHandle): Promise<CommitObservation[]>;
 }

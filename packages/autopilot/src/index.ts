@@ -1,10 +1,42 @@
 /**
  * @autopilot-console/autopilot
- * Task-file compatibility, semantic validation, approval snapshots, progress reads.
+ * Task-file compatibility, semantic validation, approval snapshots, progress reads,
+ * and AutopilotRunner CLI adapter.
  */
 
 export const packageName = "@autopilot-console/autopilot" as const;
 
+export type {
+	AutopilotRunHandle,
+	AutopilotRunner,
+	AutopilotStartRequest,
+	CommitObservation,
+	RuntimeValidation,
+	SignalKind,
+	TaskValidation,
+	WaitOptions,
+} from "./runner/autopilot-runner";
+export {
+	assertBranchCompatibility,
+	type BranchCompatibilityCheck,
+	type BranchCompatibilityPlan,
+	prepareBranchCompatibility,
+} from "./runner/branch-compatibility";
+export {
+	CliAutopilotRunner,
+	type CliAutopilotRunnerOptions,
+} from "./runner/cli-autopilot-runner";
+export {
+	createProcessIdentity,
+	type ProcessIdentity,
+	verifyProcessIdentity,
+} from "./runner/process-identity";
+export {
+	type NormalizedRunResult,
+	normalizeRunResult,
+	type ProgressSnapshot,
+	type RunOutcome,
+} from "./runner/result-normalizer";
 export {
 	type AtomicReadErr,
 	type AtomicReadOk,

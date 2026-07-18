@@ -5,30 +5,23 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import {
-	chmod,
-	mkdir,
-	mkdtemp,
-	readFile,
-	rm,
-	writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
-import { fullTaskFile } from "../testing/task-fixtures";
+import { dirname, join } from "node:path";
 import { installFakeAutopilotagent } from "../testing/fake-autopilotagent";
+import { fullTaskFile } from "../testing/task-fixtures";
 import {
-	CliAutopilotRunner,
+	assertBranchCompatibility,
+	type BranchCompatibilityPlan,
+	prepareBranchCompatibility,
+} from "./branch-compatibility";
+import {
 	type AutopilotRunner,
 	type AutopilotStartRequest,
+	CliAutopilotRunner,
 } from "./cli-autopilot-runner";
 import { createProcessIdentity, verifyProcessIdentity } from "./process-identity";
 import { normalizeRunResult } from "./result-normalizer";
-import {
-	assertBranchCompatibility,
-	prepareBranchCompatibility,
-	type BranchCompatibilityPlan,
-} from "./branch-compatibility";
 
 const tempRoots: string[] = [];
 
@@ -128,10 +121,7 @@ process.exit(0);
 		);
 		await chmod(fake, 0o755);
 
-		const taskRel = await writeTask(
-			root,
-			"docs/autopilotagent/demo/demo.json",
-		);
+		const taskRel = await writeTask(root, "docs/autopilotagent/demo/demo.json");
 		const runner: AutopilotRunner = new CliAutopilotRunner({
 			executablePath: fake,
 			envAllowlist: ["PATH", "HOME", "TMPDIR"],
@@ -154,9 +144,7 @@ process.exit(0);
 			expect(["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"]).toContain(k);
 		}
 		// No shell metacharacters / no shell invocation path.
-		expect(capture.argv.some((a) => a.includes("&&") || a.includes(";"))).toBe(
-			false,
-		);
+		expect(capture.argv.some((a) => a.includes("&&") || a.includes(";"))).toBe(false);
 	});
 
 	test("rejects absolute task path and empty path", async () => {
@@ -164,12 +152,8 @@ process.exit(0);
 		const bin = await tempDir("ap-bin-");
 		const fake = await installFakeAutopilotagent({ binDir: bin });
 		const runner = new CliAutopilotRunner({ executablePath: fake });
-		await expect(
-			runner.start(baseRequest(root, "/etc/passwd", fake)),
-		).rejects.toThrow();
-		await expect(
-			runner.start(baseRequest(root, "", fake)),
-		).rejects.toThrow();
+		await expect(runner.start(baseRequest(root, "/etc/passwd", fake))).rejects.toThrow();
+		await expect(runner.start(baseRequest(root, "", fake))).rejects.toThrow();
 	});
 
 	test("validateRuntime fails when executable missing", async () => {
@@ -191,10 +175,7 @@ describe("CliAutopilotRunner — pid, progress, notes, analytics, exit", () => {
 			binDir: bin,
 			behavior: { exitCode: 0, mutateTask: true, writeNotesAnalytics: true },
 		});
-		const taskRel = await writeTask(
-			root,
-			"docs/autopilotagent/demo/demo.json",
-		);
+		const taskRel = await writeTask(root, "docs/autopilotagent/demo/demo.json");
 		const runner = new CliAutopilotRunner({ executablePath: fake });
 		const handle = await runner.start(baseRequest(root, taskRel, fake));
 
@@ -223,10 +204,7 @@ describe("CliAutopilotRunner — pid, progress, notes, analytics, exit", () => {
 			binDir: bin,
 			behavior: { exitCode: 7, mutateTask: false },
 		});
-		const taskRel = await writeTask(
-			root,
-			"docs/autopilotagent/x/x.json",
-		);
+		const taskRel = await writeTask(root, "docs/autopilotagent/x/x.json");
 		const runner = new CliAutopilotRunner({ executablePath: fake });
 		const handle = await runner.start(baseRequest(root, taskRel, fake));
 		const result = await runner.wait(handle, { timeoutMs: 5_000 });
@@ -242,10 +220,7 @@ describe("CliAutopilotRunner — pid, progress, notes, analytics, exit", () => {
 			binDir: bin,
 			behavior: { emitSecrets: true, writeNotesAnalytics: true },
 		});
-		const taskRel = await writeTask(
-			root,
-			"docs/autopilotagent/r/r.json",
-		);
+		const taskRel = await writeTask(root, "docs/autopilotagent/r/r.json");
 		const runner = new CliAutopilotRunner({ executablePath: fake });
 		const handle = await runner.start(baseRequest(root, taskRel, fake));
 		const result = await runner.wait(handle, { timeoutMs: 5_000 });
@@ -267,10 +242,7 @@ describe("CliAutopilotRunner — pid, progress, notes, analytics, exit", () => {
 			binDir: bin,
 			behavior: { waitForSigusr1: true, mutateTask: false },
 		});
-		const taskRel = await writeTask(
-			root,
-			"docs/autopilotagent/s/s.json",
-		);
+		const taskRel = await writeTask(root, "docs/autopilotagent/s/s.json");
 		const runner = new CliAutopilotRunner({ executablePath: fake });
 		const handle = await runner.start(baseRequest(root, taskRel, fake));
 
@@ -286,11 +258,14 @@ describe("CliAutopilotRunner — pid, progress, notes, analytics, exit", () => {
 				startTimeMs: handle.processIdentity.startTimeMs - 999_999,
 			},
 		};
-		await expect(runner.signal(forged, "graceful")).rejects.toThrow(
-			/identity|mismatch|verify/i,
-		);
+		await expect(runner.signal(forged, "graceful")).rejects.toThrow(/identity|mismatch|verify/i);
 
 		await runner.signal(handle, "graceful");
+		// Give the child a moment to handle SIGUSR1 / stop-signal.
+		const deadline = Date.now() + 3_000;
+		while ((await runner.isAlive(handle)) && Date.now() < deadline) {
+			await Bun.sleep(20);
+		}
 		const result = await runner.wait(handle, { timeoutMs: 5_000 });
 		expect(result.exitCode).toBe(0);
 	});
@@ -333,9 +308,7 @@ describe("CliAutopilotRunner — pid, progress, notes, analytics, exit", () => {
 		const result = await runner.wait(handle, { timeoutMs: 5_000 });
 		// Progress should not claim success from partial JSON; last valid or diagnostic.
 		expect(result.progress).toBeDefined();
-		expect(result.outcome === "failed" || result.progress.total >= 0).toBe(
-			true,
-		);
+		expect(result.outcome === "failed" || result.progress.total >= 0).toBe(true);
 	});
 });
 
@@ -431,10 +404,7 @@ describe("branch compatibility strategy", () => {
 
 	test("strategy documentation file exists and forbids destructive operations", async () => {
 		const doc = await readFile(
-			join(
-				import.meta.dir,
-				"../../../../docs/architecture/autopilot-cli-compatibility.md",
-			),
+			join(import.meta.dir, "../../../../docs/architecture/autopilot-cli-compatibility.md"),
 			"utf8",
 		);
 		expect(doc).toMatch(/feature\/<feature-id>-/);
@@ -505,10 +475,7 @@ describe("relevant commits observation", () => {
 			binDir: bin,
 			behavior: { mutateTask: false, writeNotesAnalytics: false },
 		});
-		const taskRel = await writeTask(
-			root,
-			"docs/autopilotagent/demo/demo.json",
-		);
+		const taskRel = await writeTask(root, "docs/autopilotagent/demo/demo.json");
 		const runner = new CliAutopilotRunner({ executablePath: fake });
 		const handle = await runner.start(
 			baseRequest(root, taskRel, fake, { expectedBranch: expected }),

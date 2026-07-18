@@ -52,10 +52,10 @@ history.
 
 ## Forbidden operations
 
-- Force push (`git push --force`, `--force-with-lease` as a workaround)
-- History rewrite (`rebase`, `filter-branch`, `commit --amend` of foreign history)
-- Branch deletion of the feature or basename refs as part of this strategy
-- `git reset --hard`, `git clean -fd`, discarding unrelated worktree changes
+- Never force push (any force flag on `git push`, including lease variants)
+- No history rewrite (`rebase`, `filter-branch`, `commit --amend` of foreign history)
+- Never delete branch of the feature or basename refs as part of this strategy
+- Hard reset, clean -fd, discarding unrelated worktree changes
 - Engine fork or task-file rewrite solely to change the basename branch name
 
 ## Contract tests

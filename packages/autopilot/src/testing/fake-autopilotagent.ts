@@ -80,6 +80,26 @@ const taskPath = resolve(cwd, taskArg);
 const featureDir = dirname(taskPath);
 const pidPath = join(featureDir, "run.pid");
 const base = basename(taskPath, ".json");
+const stopFile = join(featureDir, "stop-signal");
+
+function cleanup() {
+  try {
+    if (cfg.writePid && existsSync(pidPath)) {
+      // mirror run.sh: pid removed by wrapper; leave for tests to observe
+    }
+  } catch {}
+}
+
+// Register graceful handlers before any other work so early signals are caught.
+if (cfg.waitForSigusr1) {
+  process.on("SIGUSR1", () => {
+    cleanup();
+    process.exit(cfg.exitCode);
+  });
+  process.on("SIGTERM", () => {
+    process.exit(143);
+  });
+}
 
 if (cfg.writePid) {
   writeFileSync(pidPath, String(process.pid), "utf8");
@@ -142,25 +162,14 @@ if (cfg.writeMalformedTask && existsSync(taskPath)) {
   }
 }
 
-function cleanup() {
-  try {
-    if (cfg.writePid && existsSync(pidPath)) {
-      // mirror run.sh: remove pid on exit
-      // (tests may race; ignore errors)
-    }
-  } catch {}
-}
-
 if (cfg.waitForSigusr1) {
-  let stop = false;
-  process.on("SIGUSR1", () => {
-    stop = true;
-  });
-  process.on("SIGTERM", () => {
-    process.exit(143);
-  });
+  // Poll stop-signal file like real run.sh (handlers already registered).
   const start = Date.now();
-  while (!stop && Date.now() - start < 30_000) {
+  while (Date.now() - start < 30_000) {
+    if (existsSync(stopFile)) {
+      cleanup();
+      process.exit(cfg.exitCode);
+    }
     await Bun.sleep(50);
   }
   cleanup();
