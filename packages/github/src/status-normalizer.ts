@@ -2,8 +2,7 @@
  * Map gh PR view + check rollup into domain PullRequestStatus.
  */
 
-import type { GhPrView } from "./gh-json-schemas";
-import { isRecord } from "./gh-json-schemas";
+import { type GhPrView, isRecord } from "./gh-json-schemas";
 import type {
 	CheckConclusion,
 	CheckObservation,
@@ -18,10 +17,6 @@ export function normalizeLifecycleState(state: string): PullRequestLifecycleStat
 	if (s === "MERGED") return "merged";
 	if (s === "CLOSED") return "closed";
 	if (s === "OPEN") return "open";
-	// gh sometimes returns lowercase
-	if (state === "merged") return "merged";
-	if (state === "closed") return "closed";
-	if (state === "open") return "open";
 	throw new Error(`unknown PR state: ${state}`);
 }
 
