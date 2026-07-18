@@ -741,6 +741,14 @@ export async function createTaskApproval(
 	return mapTaskApproval(rows[0] as Record<string, unknown>);
 }
 
+export async function getTaskApprovalById(
+	sql: Queryable,
+	id: string,
+): Promise<TaskApprovalRow | null> {
+	const rows = await sql`SELECT * FROM task_approvals WHERE id = ${id} LIMIT 1`;
+	return rows[0] ? mapTaskApproval(rows[0] as Record<string, unknown>) : null;
+}
+
 export async function createPullRequestIdentity(
 	sql: Queryable,
 	input: {

@@ -37,6 +37,7 @@ export {
 	getReleaseById,
 	getSessionById,
 	getSessionByTokenHash,
+	getTaskApprovalById,
 	getWorkspace,
 	listFeaturesByRelease,
 	listReleasesByProject,
@@ -85,6 +86,17 @@ export {
 	updateAttemptStatus,
 	type WorkerRegistrationRow,
 } from "./repositories/workflow-repositories";
+export {
+	createDevelopmentQueue,
+	type ClaimAttemptResult,
+	type DevelopmentQueue,
+	type DevelopmentQueueOptions,
+} from "./queue/development-queue";
+export {
+	createLeaseReconciler,
+	type LeaseReconciler,
+	type LeaseReconcilerOptions,
+} from "./queue/lease-reconciler";
 export {
 	applyCoreMigration,
 	CORE_VERSION,
