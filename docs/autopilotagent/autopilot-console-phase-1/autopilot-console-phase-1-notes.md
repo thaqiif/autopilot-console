@@ -1,20 +1,16 @@
 # autopilot-console-phase-1 Progress Notes
 
 ## Current State
-- Last completed: requirement 3
+- Last completed: requirement 5
 - Working on: none (batch 1 complete)
 - Blockers: none
 
 ## Files Modified
-- packages/database/migrations/0001_core_entities.sql
-- packages/database/src/client.ts
-- packages/database/src/schema/core-migration.ts
-- packages/database/src/schema/enums.ts
-- packages/database/src/schema/core-schema.integration.test.ts
-- packages/database/src/repositories/core-repositories.ts
-- packages/database/src/testing/database-fixture.ts
-- packages/database/src/index.ts
-- packages/database/package.json (postgres dep)
+- packages/domain/src/feature/feature-state.ts
+- packages/domain/src/feature/feature-transition.ts
+- packages/domain/src/feature/feature-state-machine.ts
+- packages/domain/src/feature/feature-state-machine.test.ts
+- packages/domain/src/index.ts
 
 ## Progress
 
@@ -53,9 +49,38 @@
   - bun/postgres `expect().rejects` can hang; use try/catch mustReject helper.
   - Prefer TRUNCATE isolation over DROP SCHEMA per test when pool/DDL thrash is an issue.
 
+### Requirement 4: Workflow persistence (attempts, events, outbox)
+- Started: 2026-07-18
+- Completed: 2026-07-18
+- Commits:
+  - 0de970f test(database): add failing workflow schema integration suite
+  - 8d27931 feat(database): implement workflow PostgreSQL schema and repositories
+  - 04682c2 refactor(database): centralize JSON binding helper for workflow repos
+
+### Requirement 5: Feature lifecycle state machine
+- Started: 2026-07-18
+- Completed: 2026-07-18
+- Duration: ~session
+- Commits:
+  - 557e18f test(domain): add failing feature lifecycle state-machine matrix suite
+  - 92841af feat(domain): implement feature lifecycle state machine
+  - 3cb898d refactor(domain): cover isFeatureState and keep transition table declarative
+- Files Changed:
+  - packages/domain/src/feature/feature-state.ts (closed F-5 state set + terminal helper)
+  - packages/domain/src/feature/feature-transition.ts (command/result types, owners)
+  - packages/domain/src/feature/feature-state-machine.ts (declarative table, applyFeatureTransition, listAllowedTransitions)
+  - packages/domain/src/feature/feature-state-machine.test.ts (exhaustive matrix)
+  - packages/domain/src/index.ts (public exports)
+- Learnings:
+  - Domain package has no `@autopilot-console/shared` dependency; keep pure UTC ISO via Date#toISOString in domain.
+  - BLOCKED is open from every nonterminal via `guard` only; DEVELOPMENT_MERGED is hard-terminal (no BLOCKED either).
+  - Idempotency is modeled as command carrying priorAppliedOperationId/result so pure service stays side-effect free.
+
 ## Session Log
 - [2026-07-18] Started task file
 - [2026-07-18] Completed requirement 1 (Red/Green/Refactor)
 - [2026-07-18] Completed requirement 2 (Red/Green/Refactor)
 - [2026-07-18] Completed requirement 3 (Red/Green/Refactor)
+- [2026-07-18] Completed requirement 4 (Red/Green/Refactor)
+- [2026-07-18] Completed requirement 5 (Red/Green/Refactor)
 - [2026-07-18] Batch 1 complete — stop after 1 requirement

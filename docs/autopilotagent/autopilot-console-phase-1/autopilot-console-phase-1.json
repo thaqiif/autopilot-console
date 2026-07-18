@@ -282,15 +282,15 @@
         "test": {
           "description": "Write isolated workflow-schema integration tests for immutable attempts, active-project uniqueness, stable idempotency, append-only events, lease/outbox claiming, cross-project foreign keys, and whole-transaction rollback; verify they fail before migration 0002.",
           "file": "packages/database/src/schema/workflow-schema.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Add the workflow migration, typed schema, and transaction-scoped job, event, worker, and outbox repositories with database-enforced invariants.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Consolidate claim and append-only repository primitives, review partial indexes and lock ordering for races, and rerun the integration suite repeatedly to detect pollution.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -298,7 +298,7 @@
         "Prove a failed transaction commits none of its feature, attempt, activity, audit, or outbox changes.",
         "Re-run migration tests against fresh and already-migrated databases."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "5",
@@ -345,15 +345,15 @@
         "test": {
           "description": "Create an exhaustive state-transition matrix test first, including idempotent repeats, wrong owners, stale versions, BLOCKED guard entry, forbidden transitions, and terminal DEVELOPMENT_MERGED behavior; verify it fails with no state machine.",
           "file": "packages/domain/src/feature/feature-state-machine.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement the closed state types, transition commands/results, and single deterministic state-machine service sufficient to satisfy the exhaustive matrix.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Generate transition lookup structures from one declarative table, enforce exhaustiveness at compile time, and rerun all matrix and mutation-safety tests.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -361,7 +361,7 @@
         "Mutation-test representative allowed and forbidden rows to ensure the suite detects table changes.",
         "Confirm no public API permits direct feature-state assignment."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "6",
