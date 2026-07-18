@@ -481,4 +481,3 @@ describe("secret redaction in auth surfaces", () => {
 		expect(sessionJson).not.toMatch(/"rawToken"/);
 	});
 });
-

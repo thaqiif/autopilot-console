@@ -12,6 +12,7 @@ export {
 } from "./client";
 export {
 	type AdminAccountRow,
+	countAdminAccounts,
 	createAdminAccount,
 	createFeature,
 	createProject,
@@ -21,12 +22,19 @@ export {
 	createTaskApproval,
 	createWorkspace,
 	type FeatureRow,
+	getAdminAccountById,
+	getAdminAccountByUsername,
+	getSessionById,
+	getSessionByTokenHash,
 	getWorkspace,
 	type ProjectRow,
 	type PullRequestRow,
 	type ReleaseRow,
+	revokeSessionById,
+	revokeSessionsForAdmin,
 	type SessionRow,
 	type TaskApprovalRow,
+	updateAdminPasswordHash,
 	type WorkspaceRow,
 } from "./repositories/core-repositories";
 export {

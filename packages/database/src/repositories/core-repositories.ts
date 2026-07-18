@@ -254,6 +254,47 @@ export async function createAdminAccount(
 	return mapAdmin(rows[0] as Record<string, unknown>);
 }
 
+export async function countAdminAccounts(sql: Queryable): Promise<number> {
+	const rows = await sql`SELECT count(*)::int AS n FROM admin_accounts`;
+	return (rows[0]?.n as number) ?? 0;
+}
+
+export async function getAdminAccountByUsername(
+	sql: Queryable,
+	username: string,
+): Promise<AdminAccountRow | null> {
+	const rows = await sql`
+		SELECT * FROM admin_accounts WHERE username = ${username} LIMIT 1
+	`;
+	return rows[0] ? mapAdmin(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function getAdminAccountById(
+	sql: Queryable,
+	id: string,
+): Promise<AdminAccountRow | null> {
+	const rows = await sql`
+		SELECT * FROM admin_accounts WHERE id = ${id} LIMIT 1
+	`;
+	return rows[0] ? mapAdmin(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function updateAdminPasswordHash(
+	sql: Queryable,
+	input: { id: string; passwordHash: string },
+): Promise<AdminAccountRow> {
+	const rows = await sql`
+		UPDATE admin_accounts
+		SET password_hash = ${input.passwordHash}, updated_at = now()
+		WHERE id = ${input.id}
+		RETURNING *
+	`;
+	if (!rows[0]) {
+		throw new Error(`admin account ${input.id} not found`);
+	}
+	return mapAdmin(rows[0] as Record<string, unknown>);
+}
+
 export async function createSession(
 	sql: Queryable,
 	input: { adminAccountId: string; tokenHash: string; expiresAt: Date },
@@ -264,6 +305,49 @@ export async function createSession(
 		RETURNING *
 	`;
 	return mapSession(rows[0] as Record<string, unknown>);
+}
+
+export async function getSessionByTokenHash(
+	sql: Queryable,
+	tokenHash: string,
+): Promise<SessionRow | null> {
+	const rows = await sql`
+		SELECT * FROM sessions WHERE token_hash = ${tokenHash} LIMIT 1
+	`;
+	return rows[0] ? mapSession(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function getSessionById(sql: Queryable, id: string): Promise<SessionRow | null> {
+	const rows = await sql`
+		SELECT * FROM sessions WHERE id = ${id} LIMIT 1
+	`;
+	return rows[0] ? mapSession(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function revokeSessionById(
+	sql: Queryable,
+	input: { id: string; revokedAt: Date },
+): Promise<SessionRow | null> {
+	const rows = await sql`
+		UPDATE sessions
+		SET revoked_at = ${input.revokedAt}
+		WHERE id = ${input.id} AND revoked_at IS NULL
+		RETURNING *
+	`;
+	return rows[0] ? mapSession(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function revokeSessionsForAdmin(
+	sql: Queryable,
+	input: { adminAccountId: string; revokedAt: Date },
+): Promise<number> {
+	const rows = await sql`
+		UPDATE sessions
+		SET revoked_at = ${input.revokedAt}
+		WHERE admin_account_id = ${input.adminAccountId} AND revoked_at IS NULL
+		RETURNING id
+	`;
+	return rows.length;
 }
 
 export async function createProject(
