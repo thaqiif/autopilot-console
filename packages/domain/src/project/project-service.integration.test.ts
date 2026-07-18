@@ -9,6 +9,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type {
+	AutopilotRunner,
+	RuntimeValidation,
+	TaskValidation,
+} from "../../../autopilot/src/index";
 import {
 	applyCoreMigration,
 	applyWorkflowMigration,
@@ -25,7 +30,6 @@ import {
 	listAuditEventsForTarget,
 	type Sql,
 } from "../../../database/src/index";
-import type { AutopilotRunner, RuntimeValidation, TaskValidation } from "../../../autopilot/src/index";
 import type {
 	GitGateway,
 	GitPreflightRequest,
@@ -78,9 +82,11 @@ function okPreflight(
 	};
 }
 
-function createFakeGit(options: {
-	preflight?: (req: GitPreflightRequest) => Promise<GitPreflightResult> | GitPreflightResult;
-} = {}): GitGateway {
+function createFakeGit(
+	options: {
+		preflight?: (req: GitPreflightRequest) => Promise<GitPreflightResult> | GitPreflightResult;
+	} = {},
+): GitGateway {
 	return {
 		async preflight(request) {
 			if (options.preflight) return options.preflight(request);
@@ -98,11 +104,13 @@ function createFakeGit(options: {
 	};
 }
 
-function createFakeGithub(options: {
-	validateAccess?: (
-		req: ValidateAccessRequest,
-	) => Promise<ValidateAccessResult> | ValidateAccessResult;
-} = {}): GitHubGateway {
+function createFakeGithub(
+	options: {
+		validateAccess?: (
+			req: ValidateAccessRequest,
+		) => Promise<ValidateAccessResult> | ValidateAccessResult;
+	} = {},
+): GitHubGateway {
 	return {
 		async validateAccess(request) {
 			if (options.validateAccess) return options.validateAccess(request);
@@ -127,13 +135,14 @@ function createFakeGithub(options: {
 	};
 }
 
-function createFakeAutopilot(options: {
-	runtime?: RuntimeValidation;
-	task?: TaskValidation;
-} = {}): AutopilotRunner {
+function createFakeAutopilot(
+	options: { runtime?: RuntimeValidation; task?: TaskValidation } = {},
+): AutopilotRunner {
 	return {
 		async validateRuntime() {
-			return options.runtime ?? { ok: true, message: "ok", executablePath: "/usr/bin/autopilotagent" };
+			return (
+				options.runtime ?? { ok: true, message: "ok", executablePath: "/usr/bin/autopilotagent" }
+			);
 		},
 		async validateTask() {
 			return options.task ?? { ok: true, message: "ok", checksum: "deadbeef" };
@@ -157,12 +166,14 @@ function createFakeAutopilot(options: {
 	};
 }
 
-function makeService(overrides: {
-	git?: GitGateway;
-	github?: GitHubGateway;
-	autopilot?: AutopilotRunner;
-	now?: () => Date;
-} = {}): ProjectService {
+function makeService(
+	overrides: {
+		git?: GitGateway;
+		github?: GitHubGateway;
+		autopilot?: AutopilotRunner;
+		now?: () => Date;
+	} = {},
+): ProjectService {
 	return createProjectService({
 		sql,
 		workspaceRoots: [workspaceRoot],
@@ -176,7 +187,10 @@ function makeService(overrides: {
 const ACTOR = { actorType: "administrator" as const, actorId: "admin-1" };
 
 async function seedActiveJob(projectId: string): Promise<void> {
-	const feature = await fixture.featureInProject(projectId, `job-${crypto.randomUUID().slice(0, 6)}`);
+	const feature = await fixture.featureInProject(
+		projectId,
+		`job-${crypto.randomUUID().slice(0, 6)}`,
+	);
 	const admin = await createAdminAccount(sql, {
 		username: `a-${crypto.randomUUID().slice(0, 8)}`,
 		passwordHash: "$argon2id$v=19$m=65536,t=3,p=4$seed",
@@ -304,7 +318,10 @@ describe("project validation aggregate", () => {
 					repositoryReadable: false,
 					pushFeasible: false,
 					failures: [
-						{ code: "NOT_AUTHENTICATED", message: "gh auth status failed token=ghp_SECRETTOKEN1234567890" },
+						{
+							code: "NOT_AUTHENTICATED",
+							message: "gh auth status failed token=ghp_SECRETTOKEN1234567890",
+						},
 						{ code: "REPO_INACCESSIBLE", message: "cannot read" },
 						{ code: "PUSH_NOT_FEASIBLE", message: "no push" },
 					],
@@ -413,9 +430,7 @@ describe("project create", () => {
 			targetType: "project",
 			targetId: created.project.id,
 		});
-		expect(audits.some((a) => a.action === "project.create" && a.result === "success")).toBe(
-			true,
-		);
+		expect(audits.some((a) => a.action === "project.create" && a.result === "success")).toBe(true);
 		expect(JSON.stringify(audits)).not.toMatch(/ghp_|password|Bearer /i);
 
 		// duplicate path rejected
@@ -471,11 +486,7 @@ describe("project create", () => {
 									if (first.includes("INSERT INTO audit_events")) {
 										throw new Error("forced audit failure");
 									}
-									return Reflect.apply(
-										t as unknown as (...a: unknown[]) => unknown,
-										thisArg,
-										args,
-									);
+									return Reflect.apply(t as unknown as (...a: unknown[]) => unknown, thisArg, args);
 								},
 								get(t, p, r) {
 									const v = Reflect.get(t, p, r);
@@ -613,9 +624,7 @@ describe("project update protection", () => {
 			targetType: "project",
 			targetId: created.project.id,
 		});
-		expect(audits.some((a) => a.action === "project.update" && a.result === "success")).toBe(
-			true,
-		);
+		expect(audits.some((a) => a.action === "project.update" && a.result === "success")).toBe(true);
 	});
 });
 
@@ -666,7 +675,9 @@ describe("project archive", () => {
 		expect(loaded?.status).toBe("archived");
 
 		// checkout still on disk
-		const st = await Bun.file(join(projectDir, ".")).exists().catch(() => false);
+		const st = await Bun.file(join(projectDir, "."))
+			.exists()
+			.catch(() => false);
 		// directory exists via realpath
 		expect(await realpath(projectDir)).toBe(projectDir);
 
@@ -674,9 +685,7 @@ describe("project archive", () => {
 			targetType: "project",
 			targetId: created.project.id,
 		});
-		expect(audits.some((a) => a.action === "project.archive" && a.result === "success")).toBe(
-			true,
-		);
+		expect(audits.some((a) => a.action === "project.archive" && a.result === "success")).toBe(true);
 
 		// re-register same path after archive allowed
 		const recreated = await service.createProject({

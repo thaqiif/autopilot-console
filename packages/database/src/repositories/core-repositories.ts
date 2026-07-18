@@ -389,10 +389,7 @@ export async function createProject(
 	return mapProject(rows[0] as Record<string, unknown>);
 }
 
-export async function getProjectById(
-	sql: Queryable,
-	id: string,
-): Promise<ProjectRow | null> {
+export async function getProjectById(sql: Queryable, id: string): Promise<ProjectRow | null> {
 	const rows = await sql`SELECT * FROM projects WHERE id = ${id} LIMIT 1`;
 	return rows[0] ? mapProject(rows[0] as Record<string, unknown>) : null;
 }
@@ -464,22 +461,16 @@ export async function updateProject(
 		UPDATE projects SET
 			name = ${input.name ?? current.name},
 			slug = ${input.slug ?? current.slug},
-			description = ${
-				input.description !== undefined ? input.description : current.description
-			},
+			description = ${input.description !== undefined ? input.description : current.description},
 			github_owner = ${input.githubOwner ?? current.githubOwner},
 			github_repo = ${input.githubRepo ?? current.githubRepo},
 			canonical_path = ${input.canonicalPath ?? current.canonicalPath},
 			development_branch = ${input.developmentBranch ?? current.developmentBranch},
 			validation_status = ${
-				input.validationStatus !== undefined
-					? input.validationStatus
-					: current.validationStatus
+				input.validationStatus !== undefined ? input.validationStatus : current.validationStatus
 			},
 			last_validated_at = ${
-				input.lastValidatedAt !== undefined
-					? input.lastValidatedAt
-					: current.lastValidatedAt
+				input.lastValidatedAt !== undefined ? input.lastValidatedAt : current.lastValidatedAt
 			},
 			updated_at = now()
 		WHERE id = ${input.id}

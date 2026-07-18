@@ -41,7 +41,23 @@ export {
 	type TransitionOwner,
 	type TransitionRejectionReason,
 } from "./feature/feature-state-machine";
-
+export type { Project, ProjectActor, ProjectStatus } from "./project/project";
+export {
+	type ArchiveProjectResult,
+	type CreateProjectResult,
+	createProjectService,
+	type ProjectMutationFailureReason,
+	type ProjectService,
+	type ProjectServiceOptions,
+	type UpdateProjectResult,
+} from "./project/project-service";
+export {
+	PROJECT_VALIDATION_CHECK_CODES,
+	type ProjectValidationCheck,
+	type ProjectValidationCheckCode,
+	type ProjectValidationInput,
+	type ProjectValidationResult,
+} from "./project/project-validation";
 export {
 	computeDevelopmentProgress,
 	type DevelopmentProgress,
