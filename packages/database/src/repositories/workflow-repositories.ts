@@ -609,6 +609,20 @@ export async function countActiveAttemptsForProject(
 	return (rows[0]?.n as number) ?? 0;
 }
 
+export async function countActiveAttemptsForRelease(
+	sql: Queryable,
+	releaseId: string,
+): Promise<number> {
+	const rows = await sql`
+		SELECT count(*)::int AS n
+		FROM development_job_attempts a
+		INNER JOIN features f ON f.id = a.feature_id
+		WHERE f.release_id = ${releaseId}
+			AND a.status IN ('QUEUED', 'RUNNING', 'CANCEL_REQUESTED')
+	`;
+	return (rows[0]?.n as number) ?? 0;
+}
+
 export async function listAuditEventsForTarget(
 	sql: Queryable,
 	input: { targetType: string; targetId: string },

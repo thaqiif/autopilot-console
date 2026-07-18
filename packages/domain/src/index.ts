@@ -23,6 +23,15 @@ export {
 	type MapFailureInput,
 	mapFailure,
 } from "./failure/failure-policy";
+export type { Feature } from "./feature/feature";
+export {
+	type CreateFeatureResult,
+	createFeatureService,
+	type FeatureMutationFailureReason,
+	type FeatureService,
+	type FeatureServiceOptions,
+	type UpdateFeatureResult,
+} from "./feature/feature-service";
 export {
 	type AppliedFeatureTransition,
 	applyFeatureTransition,
@@ -70,3 +79,14 @@ export {
 	RELEASE_DEVELOPMENT_STATUSES,
 	type ReleaseDevelopmentStatus,
 } from "./release/development-progress";
+export type { Release, ReleaseStatus } from "./release/release";
+export {
+	type ArchiveReleaseResult,
+	type CreateReleaseResult,
+	createReleaseService,
+	type ReleaseMutationFailureReason,
+	type ReleaseProgressResult,
+	type ReleaseService,
+	type ReleaseServiceOptions,
+	type UpdateReleaseResult,
+} from "./release/release-service";

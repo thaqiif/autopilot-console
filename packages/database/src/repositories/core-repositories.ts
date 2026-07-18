@@ -505,20 +505,118 @@ export async function createRelease(
 		version: string;
 		sortOrder: number;
 		description?: string;
+		status?: ReleaseStatus;
 	},
 ): Promise<ReleaseRow> {
 	const rows = await sql`
-		INSERT INTO releases (project_id, name, version, description, sort_order)
+		INSERT INTO releases (project_id, name, version, description, sort_order, status)
 		VALUES (
 			${input.projectId},
 			${input.name},
 			${input.version},
 			${input.description ?? null},
-			${input.sortOrder}
+			${input.sortOrder},
+			${input.status ?? "PLANNED"}
 		)
 		RETURNING *
 	`;
 	return mapRelease(rows[0] as Record<string, unknown>);
+}
+
+export async function getReleaseById(sql: Queryable, id: string): Promise<ReleaseRow | null> {
+	const rows = await sql`SELECT * FROM releases WHERE id = ${id} LIMIT 1`;
+	return rows[0] ? mapRelease(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function listReleasesByProject(
+	sql: Queryable,
+	projectId: string,
+): Promise<ReleaseRow[]> {
+	const rows = await sql`
+		SELECT * FROM releases
+		WHERE project_id = ${projectId}
+		ORDER BY sort_order ASC, created_at ASC
+	`;
+	return rows.map((row) => mapRelease(row as Record<string, unknown>));
+}
+
+export async function findReleaseByProjectNameVersion(
+	sql: Queryable,
+	input: { projectId: string; name: string; version: string },
+): Promise<ReleaseRow | null> {
+	const rows = await sql`
+		SELECT * FROM releases
+		WHERE project_id = ${input.projectId}
+			AND name = ${input.name}
+			AND version = ${input.version}
+		LIMIT 1
+	`;
+	return rows[0] ? mapRelease(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function nextReleaseSortOrder(sql: Queryable, projectId: string): Promise<number> {
+	const rows = await sql`
+		SELECT COALESCE(MAX(sort_order), 0)::int AS n
+		FROM releases
+		WHERE project_id = ${projectId}
+	`;
+	return ((rows[0]?.n as number) ?? 0) + 1;
+}
+
+export async function updateRelease(
+	sql: Queryable,
+	input: {
+		id: string;
+		name?: string;
+		version?: string;
+		description?: string | null;
+		sortOrder?: number;
+		status?: ReleaseStatus;
+	},
+): Promise<ReleaseRow> {
+	const current = await getReleaseById(sql, input.id);
+	if (!current) throw new Error(`release ${input.id} not found`);
+	const rows = await sql`
+		UPDATE releases SET
+			name = ${input.name ?? current.name},
+			version = ${input.version ?? current.version},
+			description = ${input.description !== undefined ? input.description : current.description},
+			sort_order = ${input.sortOrder ?? current.sortOrder},
+			status = ${input.status ?? current.status},
+			updated_at = now()
+		WHERE id = ${input.id}
+		RETURNING *
+	`;
+	if (!rows[0]) throw new Error(`release ${input.id} not found`);
+	return mapRelease(rows[0] as Record<string, unknown>);
+}
+
+export async function archiveRelease(
+	sql: Queryable,
+	input: { id: string; archivedAt?: Date },
+): Promise<ReleaseRow> {
+	const archivedAt = input.archivedAt ?? new Date();
+	const rows = await sql`
+		UPDATE releases SET
+			archived_at = ${archivedAt},
+			updated_at = now()
+		WHERE id = ${input.id} AND archived_at IS NULL
+		RETURNING *
+	`;
+	if (!rows[0]) throw new Error(`active release ${input.id} not found`);
+	return mapRelease(rows[0] as Record<string, unknown>);
+}
+
+export async function listFeaturesByRelease(
+	sql: Queryable,
+	releaseId: string,
+): Promise<FeatureRow[]> {
+	const rows = await sql`
+		SELECT * FROM features
+		WHERE release_id = ${releaseId}
+		ORDER BY created_at ASC
+	`;
+	return rows.map((row) => mapFeature(row as Record<string, unknown>));
 }
 
 export async function createFeature(
@@ -530,20 +628,85 @@ export async function createFeature(
 		title: string;
 		branchName: string;
 		summary?: string;
+		id?: string;
+		state?: FeatureState;
 	},
 ): Promise<FeatureRow> {
+	const rows = input.id
+		? await sql`
+			INSERT INTO features (id, project_id, release_id, slug, title, summary, branch_name, state)
+			VALUES (
+				${input.id},
+				${input.projectId},
+				${input.releaseId},
+				${input.slug},
+				${input.title},
+				${input.summary ?? null},
+				${input.branchName},
+				${input.state ?? "PLANNED"}
+			)
+			RETURNING *
+		`
+		: await sql`
+			INSERT INTO features (project_id, release_id, slug, title, summary, branch_name, state)
+			VALUES (
+				${input.projectId},
+				${input.releaseId},
+				${input.slug},
+				${input.title},
+				${input.summary ?? null},
+				${input.branchName},
+				${input.state ?? "PLANNED"}
+			)
+			RETURNING *
+		`;
+	return mapFeature(rows[0] as Record<string, unknown>);
+}
+
+export async function getFeatureById(sql: Queryable, id: string): Promise<FeatureRow | null> {
+	const rows = await sql`SELECT * FROM features WHERE id = ${id} LIMIT 1`;
+	return rows[0] ? mapFeature(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function findFeatureByProjectSlug(
+	sql: Queryable,
+	input: { projectId: string; slug: string },
+): Promise<FeatureRow | null> {
 	const rows = await sql`
-		INSERT INTO features (project_id, release_id, slug, title, summary, branch_name)
-		VALUES (
-			${input.projectId},
-			${input.releaseId},
-			${input.slug},
-			${input.title},
-			${input.summary ?? null},
-			${input.branchName}
-		)
+		SELECT * FROM features
+		WHERE project_id = ${input.projectId} AND slug = ${input.slug}
+		LIMIT 1
+	`;
+	return rows[0] ? mapFeature(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function updateFeature(
+	sql: Queryable,
+	input: {
+		id: string;
+		title?: string;
+		slug?: string;
+		summary?: string | null;
+		state?: FeatureState;
+		branchName?: string;
+		taskPath?: string | null;
+	},
+): Promise<FeatureRow> {
+	const current = await getFeatureById(sql, input.id);
+	if (!current) throw new Error(`feature ${input.id} not found`);
+	const rows = await sql`
+		UPDATE features SET
+			title = ${input.title ?? current.title},
+			slug = ${input.slug ?? current.slug},
+			summary = ${input.summary !== undefined ? input.summary : current.summary},
+			state = ${input.state ?? current.state},
+			branch_name = ${input.branchName ?? current.branchName},
+			task_path = ${input.taskPath !== undefined ? input.taskPath : current.taskPath},
+			updated_at = now()
+		WHERE id = ${input.id}
 		RETURNING *
 	`;
+	if (!rows[0]) throw new Error(`feature ${input.id} not found`);
 	return mapFeature(rows[0] as Record<string, unknown>);
 }
 

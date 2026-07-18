@@ -12,18 +12,16 @@ import {
 	countActiveAttemptsForProject,
 	createAdminAccount,
 	createDatabaseClient,
-	createDatabaseFixture,
 	createDevelopmentAttempt,
 	createProject,
 	createTaskApproval,
 	createWorkspace,
 	type DatabaseClient,
-	type DatabaseFixture,
 	type Sql,
 } from "../../../database/src/index";
 import { generateFeatureBranch } from "../../../shared/src/git/feature-branch";
-import type { ProjectActor } from "../project/project";
 import { createFeatureService, type FeatureService } from "../feature/feature-service";
+import type { ProjectActor } from "../project/project";
 import { createReleaseService, type ReleaseService } from "./release-service";
 
 const DATABASE_URL =
@@ -32,7 +30,6 @@ const DATABASE_URL =
 
 let client: DatabaseClient;
 let sql: Sql;
-let fixture: DatabaseFixture;
 let workspaceId: string;
 let projectAId: string;
 let projectBId: string;
@@ -40,11 +37,17 @@ let projectBId: string;
 const ACTOR: ProjectActor = { actorType: "administrator", actorId: "admin-1" };
 
 function makeReleaseService(sqlOverride: Sql = sql): ReleaseService {
-	return createReleaseService({ sql: sqlOverride, now: () => new Date("2026-07-18T12:00:00.000Z") });
+	return createReleaseService({
+		sql: sqlOverride,
+		now: () => new Date("2026-07-18T12:00:00.000Z"),
+	});
 }
 
 function makeFeatureService(sqlOverride: Sql = sql): FeatureService {
-	return createFeatureService({ sql: sqlOverride, now: () => new Date("2026-07-18T12:00:00.000Z") });
+	return createFeatureService({
+		sql: sqlOverride,
+		now: () => new Date("2026-07-18T12:00:00.000Z"),
+	});
 }
 
 async function seedActiveJobForRelease(projectId: string, featureId: string, branchName: string) {
@@ -109,7 +112,6 @@ beforeEach(async () => {
 			workspaces
 		RESTART IDENTITY CASCADE
 	`);
-	fixture = createDatabaseFixture(sql);
 	const workspace = await createWorkspace(sql);
 	workspaceId = workspace.id;
 	const a = await createProject(sql, {
@@ -508,11 +510,7 @@ describe("activity and audit atomicity", () => {
 									if (first.includes("INSERT INTO audit_events")) {
 										throw new Error("forced audit failure");
 									}
-									return Reflect.apply(
-										t as unknown as (...a: unknown[]) => unknown,
-										thisArg,
-										args,
-									);
+									return Reflect.apply(t as unknown as (...a: unknown[]) => unknown, thisArg, args);
 								},
 								get(t, p, r) {
 									const v = Reflect.get(t, p, r);
