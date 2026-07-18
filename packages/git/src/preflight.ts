@@ -10,15 +10,14 @@ import {
 	type RepositoryIdentity,
 } from "../../shared/src/git/repository-identity";
 import { redactSecrets } from "../../shared/src/security/redaction";
-import { runGit } from "./cli-runner";
+import { remoteTrackingExists, runGit } from "./cli-runner";
+import { FEATURE_BRANCH_RE } from "./errors";
 import type {
 	GitPreflightFailureCode,
 	GitPreflightRequest,
 	GitPreflightResult,
 	RepositoryIdentityView,
 } from "./git-gateway";
-
-const FEATURE_BRANCH_RE = /^feature\/[A-Za-z0-9][A-Za-z0-9._-]*-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function fail(
 	code: GitPreflightFailureCode,
@@ -36,7 +35,6 @@ function toView(id: RepositoryIdentity): RepositoryIdentityView {
 }
 
 function safeRemoteUrlForResult(url: string): string {
-	// Strip credentials for any URL we surface.
 	try {
 		const u = new URL(url);
 		if (u.username || u.password) {
@@ -57,7 +55,6 @@ function listDirtyPaths(cwd: string): string[] {
 		.map((line) => line.trimEnd())
 		.filter((line) => line.length > 0)
 		.map((line) => {
-			// XY PATH or XY ORIG -> PATH
 			const rest = line.slice(3);
 			const arrow = rest.indexOf(" -> ");
 			const path = arrow >= 0 ? rest.slice(arrow + 4) : rest;
@@ -65,9 +62,31 @@ function listDirtyPaths(cwd: string): string[] {
 		});
 }
 
-function isTaskPathDirty(dirty: string[], taskRelative: string): boolean {
+function onlyTaskDirty(dirty: string[], taskRelative: string): boolean {
 	const norm = taskRelative.replace(/\\/g, "/");
-	return dirty.some((p) => p.replace(/\\/g, "/") === norm);
+	return dirty.length > 0 && dirty.every((p) => p.replace(/\\/g, "/") === norm);
+}
+
+function emptyResult(
+	request: GitPreflightRequest,
+	failures: Array<{ code: GitPreflightFailureCode; message: string }>,
+	remoteUrl: string,
+	repository: RepositoryIdentityView,
+	headBranch: string | null,
+	headSha: string | null,
+): GitPreflightResult {
+	return {
+		ok: false,
+		projectRoot: request.projectRoot,
+		remoteName: request.remoteName,
+		remoteUrl: safeRemoteUrlForResult(remoteUrl),
+		repository,
+		developmentBranch: request.developmentBranch,
+		featureBranch: request.featureBranch,
+		headBranch,
+		headSha,
+		failures,
+	};
 }
 
 /**
@@ -98,8 +117,7 @@ export async function runPreflight(request: GitPreflightRequest): Promise<GitPre
 		return emptyResult(request, failures, remoteUrl, repository, headBranch, headSha);
 	}
 
-	// Prefer configured remote.<name>.url (not insteadOf-resolved get-url) so identity
-	// checks use the operator-configured GitHub remote, not local transport rewrites.
+	// Prefer configured remote.<name>.url (not insteadOf-resolved get-url).
 	const remoteConfig = runGit(projectRoot, "config", ["--get", `remote.${request.remoteName}.url`]);
 	if (remoteConfig.status !== 0 || remoteConfig.stdout.trim().length === 0) {
 		failures.push(fail("REMOTE_MISSING", `Remote ${request.remoteName} is not configured`));
@@ -135,47 +153,22 @@ export async function runPreflight(request: GitPreflightRequest): Promise<GitPre
 		);
 	}
 
-	// Fetch remote (non-destructive) so remote-tracking refs are current when possible.
 	if (failures.every((f) => f.code !== "REMOTE_MISSING")) {
-		const fetch = runGit(projectRoot, "fetch", [
-			request.remoteName,
-			request.developmentBranch,
-			"--prune",
-		]);
-		// Fetch failure is soft if we already have the tracking ref.
-		const tracking = runGit(projectRoot, "rev-parse", [
-			"--verify",
-			`refs/remotes/${request.remoteName}/${request.developmentBranch}`,
-		]);
-		if (tracking.status !== 0) {
-			// Also try show-ref
-			const show = runGit(projectRoot, "show-ref", [
-				"--verify",
-				`refs/remotes/${request.remoteName}/${request.developmentBranch}`,
-			]);
-			if (show.status !== 0 && fetch.status !== 0) {
-				failures.push(
-					fail(
-						"DEVELOPMENT_BRANCH_MISSING",
-						`Development branch ${request.developmentBranch} not found on remote ${request.remoteName}`,
-					),
-				);
-			} else if (show.status !== 0) {
-				failures.push(
-					fail(
-						"DEVELOPMENT_BRANCH_MISSING",
-						`Development branch ${request.developmentBranch} not found on remote ${request.remoteName}`,
-					),
-				);
-			}
+		runGit(projectRoot, "fetch", [request.remoteName, request.developmentBranch, "--prune"]);
+		if (!remoteTrackingExists(projectRoot, request.remoteName, request.developmentBranch)) {
+			failures.push(
+				fail(
+					"DEVELOPMENT_BRANCH_MISSING",
+					`Development branch ${request.developmentBranch} not found on remote ${request.remoteName}`,
+				),
+			);
 		}
 	}
 
 	if (request.taskRelativePath) {
 		try {
 			const resolved = await resolveTaskPath(projectRoot, request.taskRelativePath);
-			const bytes = await readFile(resolved.absolute);
-			const checksum = sha256Hex(bytes);
+			const checksum = sha256Hex(await readFile(resolved.absolute));
 			if (request.taskChecksum && checksum !== request.taskChecksum) {
 				failures.push(
 					fail(
@@ -194,11 +187,7 @@ export async function runPreflight(request: GitPreflightRequest): Promise<GitPre
 	const dirty = listDirtyPaths(projectRoot);
 	if (dirty.length > 0) {
 		const allowTask = request.allowTaskArtifactDirty === true && request.taskRelativePath;
-		const onlyTask =
-			allowTask &&
-			dirty.length > 0 &&
-			dirty.every((p) => isTaskPathDirty([p], request.taskRelativePath as string));
-		if (!onlyTask) {
+		if (!(allowTask && onlyTaskDirty(dirty, request.taskRelativePath as string))) {
 			failures.push(
 				fail("DIRTY_WORKTREE", "Worktree has unrelated staged, unstaged, or untracked changes"),
 			);
@@ -215,28 +204,6 @@ export async function runPreflight(request: GitPreflightRequest): Promise<GitPre
 	return {
 		ok: failures.length === 0,
 		projectRoot,
-		remoteName: request.remoteName,
-		remoteUrl: safeRemoteUrlForResult(remoteUrl),
-		repository,
-		developmentBranch: request.developmentBranch,
-		featureBranch: request.featureBranch,
-		headBranch,
-		headSha,
-		failures,
-	};
-}
-
-function emptyResult(
-	request: GitPreflightRequest,
-	failures: Array<{ code: GitPreflightFailureCode; message: string }>,
-	remoteUrl: string,
-	repository: RepositoryIdentityView,
-	headBranch: string | null,
-	headSha: string | null,
-): GitPreflightResult {
-	return {
-		ok: false,
-		projectRoot: request.projectRoot,
 		remoteName: request.remoteName,
 		remoteUrl: safeRemoteUrlForResult(remoteUrl),
 		repository,

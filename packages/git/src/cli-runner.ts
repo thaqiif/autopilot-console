@@ -3,8 +3,8 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { createNormalizedError, errorCodes } from "../../shared/src/errors/normalized-error";
 import { redactSecrets } from "../../shared/src/security/redaction";
+import { adapterError } from "./errors";
 
 export type AllowedGitSubcommand =
 	| "rev-parse"
@@ -37,15 +37,6 @@ const ALLOWED = new Set<string>([
 
 const FORBIDDEN_FLAG = /^(--force|--force-with-lease|-f|--hard|--soft|--mixed)$/;
 
-function adapterError(message: string, details?: Record<string, unknown>): never {
-	throw createNormalizedError({
-		code: errorCodes.ADAPTER_ERROR,
-		message: redactSecrets(message),
-		httpStatus: 502,
-		details,
-	});
-}
-
 export interface GitRunResult {
 	status: number;
 	stdout: string;
@@ -67,7 +58,6 @@ export function runGit(
 		if (FORBIDDEN_FLAG.test(a)) {
 			adapterError(`git flag not allowed: ${a}`);
 		}
-		// Block shell metacharacters in args (defense in depth; we never use shell).
 		if (a.includes("\0")) {
 			adapterError("git argument contains NUL");
 		}
@@ -112,4 +102,12 @@ export function runGitOk(
 		});
 	}
 	return r.stdout.trim();
+}
+
+export function localBranchExists(cwd: string, branch: string): boolean {
+	return runGit(cwd, "show-ref", ["--verify", `refs/heads/${branch}`]).status === 0;
+}
+
+export function remoteTrackingExists(cwd: string, remoteName: string, branch: string): boolean {
+	return runGit(cwd, "show-ref", ["--verify", `refs/remotes/${remoteName}/${branch}`]).status === 0;
 }
