@@ -1,8 +1,8 @@
 # autopilot-console-phase-1 Progress Notes
 
 ## Current State
-- Last completed: requirement 7
-- Working on: none (batch 1 complete)
+- Last completed: requirement 8
+- Working on: requirement 9
 - Blockers: none
 
 ## Files Modified
@@ -37,6 +37,12 @@
   - Biome rejects control-char regex classes; use charCodeAt loop for ref control checks.
   - Prefix collision: `/root` vs `/root-evil` requires trailing-slash containment, not startsWith alone.
 
+### Requirement 8: Task schema, validation, snapshots, atomic reads
+- Completed: 2026-07-18 (prior session)
+- Commits: 3457329, 7a8a5e7, e3280cf
+
 ## Session Log
 - [2026-07-18T01:01:53Z] Started requirement 7
 - [2026-07-18] Completed requirement 7 (batch 1)
+
+- [2026-07-18T01:14:45Z] Started requirement 9: AutopilotRunner CLI adapter
