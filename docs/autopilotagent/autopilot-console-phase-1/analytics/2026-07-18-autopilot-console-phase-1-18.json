@@ -1,0 +1,38 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Gens-ai/autopilotagent/main/analytics.schema.json",
+  "sessionId": "2026-07-18-autopilot-console-phase-1-18",
+  "startedAt": "2026-07-18T03:35:03.000Z",
+  "completedAt": "2026-07-18T04:51:53.860Z",
+  "taskFile": "docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.json",
+  "mode": "tasks",
+  "maxIterations": 15,
+  "actualIterations": 1,
+  "requirements": [
+    {
+      "id": "17",
+      "errors": [
+        {
+          "attempt": 1,
+          "phase": "refactor",
+          "type": "build_error",
+          "message": "Configured worker typecheck filter matched no packages because the workspace package name is @autopilot-console/worker.",
+          "command": "bun run --filter worker typecheck",
+          "resolution": "Use the exact package name in the workspace filter for requirement verification."
+        },
+        {
+          "attempt": 1,
+          "phase": "refactor",
+          "type": "connection_error",
+          "message": "The optional full workspace suite could not resolve the configured PostgreSQL host; worker-scoped tests remained green.",
+          "command": "bun test",
+          "resolution": "Treat the worker package feedback loop as authoritative for this package-scoped requirement; rerun the full database-backed suite when its PostgreSQL service is available."
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "requirement": "18",
+    "status": "passed",
+    "completedAt": "2026-07-18T04:51:53.860Z"
+  }
+}
