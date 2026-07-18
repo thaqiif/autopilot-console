@@ -7,9 +7,7 @@ export const SCHEMA_URL =
 	"https://raw.githubusercontent.com/Gens-ai/autopilotagent/main/tasks.schema.json";
 
 /** Full-schema requirement skeleton (tdd + verification present). */
-export function fullRequirement(
-	overrides: Record<string, unknown> = {},
-): Record<string, unknown> {
+export function fullRequirement(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 	const id = (overrides.id as string | undefined) ?? "1";
 	return {
 		id,

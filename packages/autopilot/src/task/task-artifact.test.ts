@@ -1,17 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import {
-	chmod,
-	mkdir,
-	mkdtemp,
-	readFile,
-	realpath,
-	rm,
-	stat,
-	writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+	fullRequirement,
+	fullTaskFile,
+	minimalRequirement,
+	minimalTaskFile,
+} from "../testing/task-fixtures";
 import {
 	createTaskApprovalSnapshot,
 	evaluateAllPass,
@@ -21,12 +18,6 @@ import {
 	TASK_SCHEMA_COMPATIBILITY_VERSION,
 	validateTaskDocument,
 } from "./task-reader";
-import {
-	fullRequirement,
-	fullTaskFile,
-	minimalRequirement,
-	minimalTaskFile,
-} from "../testing/task-fixtures";
 
 const tempRoots: string[] = [];
 
@@ -66,13 +57,10 @@ describe("validateTaskDocument — schema + semantic", () => {
 	});
 
 	test("accepts minimal fixtures that only have name, description, requirements", () => {
-		const doc = minimalTaskFile(
-			{},
-			[
-				minimalRequirement({ id: "1", passes: true }),
-				minimalRequirement({ id: "2", passes: false }),
-			],
-		);
+		const doc = minimalTaskFile({}, [
+			minimalRequirement({ id: "1", passes: true }),
+			minimalRequirement({ id: "2", passes: false }),
+		]);
 		const result = validateTaskDocument(doc);
 		expect(result.ok).toBe(true);
 	});
@@ -100,9 +88,9 @@ describe("validateTaskDocument — schema + semantic", () => {
 	test("rejects non-object / non-array requirements", () => {
 		expect(validateTaskDocument(null).ok).toBe(false);
 		expect(validateTaskDocument("string").ok).toBe(false);
-		expect(
-			validateTaskDocument({ name: "x", description: "y", requirements: "nope" }).ok,
-		).toBe(false);
+		expect(validateTaskDocument({ name: "x", description: "y", requirements: "nope" }).ok).toBe(
+			false,
+		);
 	});
 
 	test("rejects duplicate requirement IDs", () => {
@@ -155,9 +143,7 @@ describe("validateTaskDocument — schema + semantic", () => {
 		const result = validateTaskDocument(doc);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.errors.some((e) => /fresh|resumable|empty|requirement/i.test(e))).toBe(
-				true,
-			);
+			expect(result.errors.some((e) => /fresh|resumable|empty|requirement/i.test(e))).toBe(true);
 		}
 	});
 
@@ -175,7 +161,15 @@ describe("validateTaskDocument — schema + semantic", () => {
 
 	test("accepts resumable state (mix of complete and incomplete)", () => {
 		const doc = fullTaskFile({}, [
-			fullRequirement({ id: "1", passes: true }),
+			fullRequirement({
+				id: "1",
+				passes: true,
+				tdd: {
+					test: { description: "t", passes: true },
+					implement: { description: "i", passes: true },
+					refactor: { description: "r", passes: true },
+				},
+			}),
 			fullRequirement({
 				id: "2",
 				passes: false,
@@ -228,16 +222,12 @@ describe("validateTaskDocument — schema + semantic", () => {
 		const result = validateTaskDocument(doc);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.errors.some((e) => /impossible|inconsistent|passes/i.test(e))).toBe(
-				true,
-			);
+			expect(result.errors.some((e) => /impossible|inconsistent|passes/i.test(e))).toBe(true);
 		}
 	});
 
 	test("rejects stuck without blockedReason", () => {
-		const doc = fullTaskFile({}, [
-			fullRequirement({ id: "1", passes: false, stuck: true }),
-		]);
+		const doc = fullTaskFile({}, [fullRequirement({ id: "1", passes: false, stuck: true })]);
 		const result = validateTaskDocument(doc);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
@@ -246,9 +236,7 @@ describe("validateTaskDocument — schema + semantic", () => {
 	});
 
 	test("rejects invalidTest without invalidTestReason", () => {
-		const doc = fullTaskFile({}, [
-			fullRequirement({ id: "1", passes: false, invalidTest: true }),
-		]);
+		const doc = fullTaskFile({}, [fullRequirement({ id: "1", passes: false, invalidTest: true })]);
 		const result = validateTaskDocument(doc);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
@@ -319,9 +307,7 @@ describe("parseTaskBytes", () => {
 		const result = parseTaskBytes(partial);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.errors.some((e) => /json|parse|malformed|partial/i.test(e))).toBe(
-				true,
-			);
+			expect(result.errors.some((e) => /json|parse|malformed|partial/i.test(e))).toBe(true);
 		}
 	});
 
@@ -365,9 +351,9 @@ describe("createTaskApprovalSnapshot", () => {
 		// Deep clone — mutating snapshot must not mutate parsed document.
 		const reqs = snapshot.requirements as Array<Record<string, unknown>>;
 		reqs[0] = { ...reqs[0], description: "mutated" };
-		expect(
-			(parsed.document.requirements[0] as { description: string }).description,
-		).not.toBe("mutated");
+		expect((parsed.document.requirements[0] as { description: string }).description).not.toBe(
+			"mutated",
+		);
 	});
 
 	test("preserves unknown fields inside the immutable requirements snapshot", () => {
@@ -522,6 +508,10 @@ describe("summarizeTaskFile + evaluateAllPass", () => {
 					invalidTest: true,
 					invalidTestReason: "passed early",
 				}),
+				fullRequirement({
+					id: "4",
+					passes: false,
+				}),
 			],
 		);
 		const parsed = parseTaskBytes(Buffer.from(JSON.stringify(doc), "utf8"));
@@ -531,7 +521,7 @@ describe("summarizeTaskFile + evaluateAllPass", () => {
 		const summary = summarizeTaskFile(parsed.document);
 		expect(summary.goals).toEqual(["g1", "g2"]);
 		expect(summary.nonGoals).toEqual(["ng1"]);
-		expect(summary.total).toBe(3);
+		expect(summary.total).toBe(4);
 		expect(summary.passed).toBe(1);
 		expect(summary.stuck).toBe(1);
 		expect(summary.invalidTest).toBe(1);
@@ -575,7 +565,15 @@ describe("summarizeTaskFile + evaluateAllPass", () => {
 			}),
 		]);
 		const mixed = fullTaskFile({}, [
-			fullRequirement({ id: "1", passes: true }),
+			fullRequirement({
+				id: "1",
+				passes: true,
+				tdd: {
+					test: { description: "t", passes: true },
+					implement: { description: "i", passes: true },
+					refactor: { description: "r", passes: true },
+				},
+			}),
 			fullRequirement({ id: "2", passes: false }),
 		]);
 		const allParsed = parseTaskBytes(Buffer.from(JSON.stringify(all), "utf8"));
