@@ -939,6 +939,21 @@
           ]
         }
       },
+      "tdd": {
+        "test": {
+          "description": "Write release/feature integration tests first for creation, ordering, project-scoped uniqueness, cross-project rejection, PLANNED defaults, deterministic branches, development status/progress, archive guards, activity/audit atomicity, and rollback.",
+          "file": "packages/domain/src/release/release-service.integration.test.ts",
+          "passes": true
+        },
+        "implement": {
+          "description": "Implement release and feature entities/services plus repository queries and transactional event/audit writes required by the tests.",
+          "passes": true
+        },
+        "refactor": {
+          "description": "Share project ownership guards and mutation transaction helpers, keep release calculations pure, and rerun isolated and combined service suites.",
+          "passes": true
+        }
+      },
       "acceptance": [
         "A project can create ordered releases with project-unique name/version, optional description, Planned/In Development/Development Merged status, and UTC timestamps.",
         "A release can create features with project-scoped unique slug, title, optional summary, PLANNED state, deterministic generated branch, and no task/job/PR references.",
@@ -951,15 +966,15 @@
         "test": {
           "description": "Write release/feature integration tests first for creation, ordering, project-scoped uniqueness, cross-project rejection, PLANNED defaults, deterministic branches, development status/progress, archive guards, activity/audit atomicity, and rollback.",
           "file": "packages/domain/src/release/release-service.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement release and feature entities/services plus repository queries and transactional event/audit writes required by the tests.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Share project ownership guards and mutation transaction helpers, keep release calculations pure, and rerun isolated and combined service suites.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -967,7 +982,7 @@
         "Exercise archive guards with queued and active attempts.",
         "Compare persisted activity/audit records with every successful mutation."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "15",
@@ -1016,15 +1031,15 @@
         "test": {
           "description": "Write isolated database integration tests first for attach, stale checksum, exact snapshot, no source rewrite, approval-and-enqueue rollback, duplicate operation keys, legal replacement/invalidation/reapproval, illegal lifecycle states, and audit/activity consistency.",
           "file": "packages/domain/src/task/task-approval-service.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement transactional task artifact and approval services that compose path/task validation, state transitions, immutable snapshots, idempotency, attempt creation, activity, and audit repositories.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Extract one approval transaction boundary and one replacement policy, remove duplicate checksum reads, and rerun race plus rollback tests repeatedly.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1032,7 +1047,7 @@
         "Inject failures after each transaction step and confirm total rollback.",
         "Verify the approved snapshot remains unchanged after the source task file is mutated."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "16",
@@ -1080,15 +1095,15 @@
         "test": {
           "description": "Write database race tests first for FIFO eligibility, duplicate claims, four-job global capacity, same-project exclusion, claim transaction rollback, heartbeat ownership, and expired-lease interruption without requeue using barriers and fake time.",
           "file": "packages/database/src/queue/development-queue.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement transactional skip-locked queue claims, capacity/project guards, leases, heartbeats, and reconciliation using job, state transition, activity, and audit repositories.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Standardize lock ordering and ownership predicates, inspect query plans and indexes, and stress the race suite repeatedly for flakiness.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1096,7 +1111,7 @@
         "Demonstrate four projects running, a fifth queued, and a second attempt for an active project unclaimed.",
         "Expire a lease with fake time and confirm interruption occurs once without relaunch."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "17",
@@ -1147,15 +1162,15 @@
         "test": {
           "description": "Write worker integration tests first with fake queue, Git, clock, and Autopilot adapters for claim/preflight/spawn ordering, persisted identity/heartbeat, browser/API independence, all-pass success, zero-exit-unpassed failure, nonzero/stuck/invalid/malformed outcomes, project mismatch, and PR-intent gating.",
           "file": "apps/worker/src/development/development-worker.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement worker registration, claim loop, preflight orchestration, direct Autopilot start, heartbeat lifecycle, result verification, and transactional completion/failure effects.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Separate pure result classification from effect orchestration, make clocks and adapters injectable, minimize transaction duration around external effects, and rerun crash-boundary cases.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1163,7 +1178,7 @@
         "Terminate the API test process after enqueue and confirm the worker finishes from persisted state.",
         "Verify no PR intent exists for any non-passing structured task result."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "18",
@@ -1217,15 +1232,15 @@
         "test": {
           "description": "Write progress observer integration tests first for atomic and malformed updates, periodic snapshots with fake time, monotonic ordering, phase/activity derivation, notes/analytics/commit ingestion, redacted bounded logs, truncation, pagination, and restart reconstruction.",
           "file": "apps/worker/src/progress/progress-observer.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement persisted progress observation, activity projection, notes/analytics parsing, relevant commit ingestion, and bounded redacted diagnostic storage wired into development execution.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Deduplicate snapshot diffs, isolate untrusted text handling, batch safe persistence without losing ordering, and rerun concurrent update and restart tests.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1233,7 +1248,7 @@
         "Exceed the log cap and verify one redacted truncation marker plus intact structured progress.",
         "Restart observer and query layers and compare reconstructed summaries and pagination."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "19",
@@ -1289,15 +1304,15 @@
         "test": {
           "description": "Use a fake process tree and fake clock to write failing tests for queued cancellation, SIGUSR1/TERM/KILL escalation, graceful exit, descendants, PID reuse/mismatch, orphan cleanup, interruption without relaunch, retry liveness refusal, immutable linked attempts, same-branch resume, and duplicate operations.",
           "file": "apps/worker/src/process/cancellation-controller.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement verified process-tree inspection, cancellation controller, orphan reconciler, and transactional retry service using AutopilotRunner and persisted identity/attempt data.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Unify liveness and identity predicates across cancellation/reconciliation/retry, remove real-time sleeps from tests and orchestration, and rerun escalation cases repeatedly.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1305,7 +1320,7 @@
         "Simulate PID reuse and confirm no signal is sent.",
         "Retry after verified exit and confirm a new attempt points to the prior attempt and same branch."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "20",

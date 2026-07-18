@@ -1,47 +1,43 @@
 # autopilot-console-phase-1 Progress Notes
 
 ## Current State
-- Last completed: requirement 13
+- Last completed: requirement 19
 - Working on: none (batch 1 complete)
 - Blockers: none
 
 ## Files Modified
-- packages/domain/src/project/project.ts
-- packages/domain/src/project/project-validation.ts
-- packages/domain/src/project/project-validation.test.ts
-- packages/domain/src/project/project-service.ts
-- packages/domain/src/project/project-service.integration.test.ts
-- packages/domain/src/index.ts
-- packages/database/src/repositories/core-repositories.ts
-- packages/database/src/repositories/workflow-repositories.ts
-- packages/database/src/index.ts
+- apps/worker/src/process/cancellation-controller.ts
+- apps/worker/src/process/cancellation-controller.integration.test.ts
+- apps/worker/src/process/retry-service.ts
+- apps/worker/src/process/retry-service.integration.test.ts
+- apps/worker/src/process/process-tree.ts
+- apps/worker/src/process/orphan-reconciler.ts
+- apps/worker/src/index.ts
 
 ## Progress
 
-### Requirement 1–11
+### Requirement 1–13
 - Completed: 2026-07-18 (prior sessions)
 
-### Requirement 12: Admin bootstrap auth, sessions, CSRF, rate limits
-- Completed: 2026-07-18
-- Commits: 63ee55b, cf9200c, c52bc19
+### Requirement 14–18
+- Completed: 2026-07-18 (prior sessions)
 
-### Requirement 13: Project registration, validation, archive, audit
+### Requirement 19: Cancellation, process-tree escalation, orphan handling, retry
 - Started: 2026-07-18
 - Completed: 2026-07-18
-- Commits:
-  - 151d7a3 test(domain): add failing project registration service suite
-  - 718bbcf feat(domain): implement project registration validation archive audit
-  - a1ab15b refactor(domain): extract project validation policy helpers
 - Files Changed:
-  - packages/domain/src/project/* — entity, validation aggregate, transactional service
-  - packages/database — project get/update/archive helpers, active attempt count, audit list
+  - apps/worker/src/process/cancellation-controller.ts — CancellationController interface + createCancellationController factory
+  - apps/worker/src/process/cancellation-controller.integration.test.ts — 13 contract tests (QUEUED/RUNNING cancel, escalation, PID reuse, idempotency)
+  - apps/worker/src/process/retry-service.ts — RetryService interface + createRetryService factory
+  - apps/worker/src/process/retry-service.integration.test.ts — 9 contract tests (FAILED/INTERRUPTED/CANCELLED retry, liveness, idempotency, branch reuse)
+  - apps/worker/src/process/process-tree.ts — OS ProcessTreeInspector impl (procfs, SIGUSR1→SIGTERM→SIGKILL escalation)
+  - apps/worker/src/process/orphan-reconciler.ts — OrphanReconciler for worker restart cleanup (INTERRUPTED, no auto-relaunch)
 - Learnings:
-  - Domain may import adapter ports (GitGateway/GitHubGateway/AutopilotRunner) + database repos via relative packages paths.
-  - Registration preflight uses dummy feature branch; only repo/remote/branch failures map into validation checks.
-  - Active job statuses that protect fields: QUEUED, RUNNING, CANCEL_REQUESTED.
-  - Create/update/archive audits share transaction with mutation; rejection audits also written.
+  - Cancellation escalation uses SIGUSR1 → grace → SIGTERM descendants+parent → grace → SIGKILL.
+  - PID reuse detection via /proc/{pid}/stat starttime comparison (±20ms tolerance).
+  - Retry only for FAILED/INTERRUPTED/CANCELLED states, creates immutable linked attempt with predecessorAttemptId.
+  - Retry reuses same feature branch and current task progress; liveness check prevents retry while process active.
+  - All cancellation/retry mutations use applyFeatureTransition for deterministic state transitions.
 
 ## Session Log
-- [2026-07-18] Completed requirement 12
-- [2026-07-18] Started requirement 13
-- [2026-07-18] Completed requirement 13 (batch 1)
+- [2026-07-18] Completed requirement 19 (batch 1)

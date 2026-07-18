@@ -11,6 +11,17 @@ export {
 	type TransactionSql,
 } from "./client";
 export {
+	type ClaimAttemptResult,
+	createDevelopmentQueue,
+	type DevelopmentQueue,
+	type DevelopmentQueueOptions,
+} from "./queue/development-queue";
+export {
+	createLeaseReconciler,
+	type LeaseReconciler,
+	type LeaseReconcilerOptions,
+} from "./queue/lease-reconciler";
+export {
 	type AdminAccountRow,
 	archiveProject,
 	archiveRelease,
@@ -86,17 +97,6 @@ export {
 	updateAttemptStatus,
 	type WorkerRegistrationRow,
 } from "./repositories/workflow-repositories";
-export {
-	createDevelopmentQueue,
-	type ClaimAttemptResult,
-	type DevelopmentQueue,
-	type DevelopmentQueueOptions,
-} from "./queue/development-queue";
-export {
-	createLeaseReconciler,
-	type LeaseReconciler,
-	type LeaseReconcilerOptions,
-} from "./queue/lease-reconciler";
 export {
 	applyCoreMigration,
 	CORE_VERSION,

@@ -26,9 +26,28 @@ export {
 	verifyDevelopmentResult,
 } from "./development/result-verifier";
 export {
+	type CancellationController,
+	type CancellationControllerOptions,
+	type CancelOutcome,
+	createCancellationController,
+	type ProcessTreeInspector,
+} from "./process/cancellation-controller";
+export {
+	createOrphanReconciler,
+	type OrphanReconciler,
+	type OrphanReconcilerOptions,
+} from "./process/orphan-reconciler";
+export { createProcessTreeInspector } from "./process/process-tree";
+export {
+	createRetryService,
+	type RetryOutcome,
+	type RetryRequest,
+	type RetryService,
+	type RetryServiceOptions,
+} from "./process/retry-service";
+export {
 	createWorkerRegistrationService,
 	type WorkerRegistrationService,
 	type WorkerRegistrationServiceOptions,
 } from "./runtime/worker-registration";
-
 export const packageName = "@autopilot-console/worker" as const;
