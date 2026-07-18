@@ -3,6 +3,7 @@ import {
 	applyFeatureTransition,
 	FEATURE_STATES,
 	type FeatureState,
+	isFeatureState,
 	isTerminalFeatureState,
 	listAllowedTransitions,
 	type TransitionOwner,
@@ -250,6 +251,8 @@ describe("feature state machine — F-5 exhaustive matrix", () => {
 			"DEVELOPMENT_MERGED",
 			"BLOCKED",
 		]);
+		expect(isFeatureState("PLANNED")).toBe(true);
+		expect(isFeatureState("not-a-state")).toBe(false);
 		expect(isTerminalFeatureState("DEVELOPMENT_MERGED")).toBe(true);
 		for (const s of NONTERMINAL) {
 			expect(isTerminalFeatureState(s)).toBe(false);
