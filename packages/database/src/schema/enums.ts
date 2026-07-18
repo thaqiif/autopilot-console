@@ -26,3 +26,33 @@ export type FeatureState = (typeof featureStates)[number];
 
 export const pullRequestObservedStates = ["open", "closed", "merged"] as const;
 export type PullRequestObservedState = (typeof pullRequestObservedStates)[number];
+
+export const jobAttemptStatuses = [
+	"QUEUED",
+	"RUNNING",
+	"CANCEL_REQUESTED",
+	"SUCCEEDED",
+	"FAILED",
+	"INTERRUPTED",
+	"CANCELLED",
+] as const;
+export type JobAttemptStatus = (typeof jobAttemptStatuses)[number];
+
+export const outboxStatuses = ["pending", "claimed", "completed", "failed"] as const;
+export type OutboxStatus = (typeof outboxStatuses)[number];
+
+export const scheduleStatuses = ["pending", "claimed", "completed", "failed", "cancelled"] as const;
+export type ScheduleStatus = (typeof scheduleStatuses)[number];
+
+export const diagnosticStreams = ["stdout", "stderr"] as const;
+export type DiagnosticStream = (typeof diagnosticStreams)[number];
+
+export const auditActorTypes = [
+	"administrator",
+	"api_system",
+	"worker",
+	"autopilot_process",
+	"github_poller",
+	"reconciliation",
+] as const;
+export type AuditActorType = (typeof auditActorTypes)[number];

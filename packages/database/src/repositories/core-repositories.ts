@@ -1,5 +1,5 @@
 import type postgres from "postgres";
-import type { Sql } from "../client";
+import type { Queryable } from "../client";
 import type { FeatureState, ProjectStatus, ReleaseStatus } from "../schema/enums";
 
 export interface WorkspaceRow {
@@ -226,7 +226,7 @@ function mapPullRequest(row: Record<string, unknown>): PullRequestRow {
 	};
 }
 
-export async function createWorkspace(sql: Sql): Promise<WorkspaceRow> {
+export async function createWorkspace(sql: Queryable): Promise<WorkspaceRow> {
 	const existing = await sql`SELECT * FROM workspaces LIMIT 1`;
 	if (existing[0]) return mapWorkspace(existing[0] as Record<string, unknown>);
 	const rows = await sql`
@@ -237,13 +237,13 @@ export async function createWorkspace(sql: Sql): Promise<WorkspaceRow> {
 	return mapWorkspace(rows[0] as Record<string, unknown>);
 }
 
-export async function getWorkspace(sql: Sql): Promise<WorkspaceRow | null> {
+export async function getWorkspace(sql: Queryable): Promise<WorkspaceRow | null> {
 	const rows = await sql`SELECT * FROM workspaces LIMIT 1`;
 	return rows[0] ? mapWorkspace(rows[0] as Record<string, unknown>) : null;
 }
 
 export async function createAdminAccount(
-	sql: Sql,
+	sql: Queryable,
 	input: { username: string; passwordHash: string },
 ): Promise<AdminAccountRow> {
 	const rows = await sql`
@@ -255,7 +255,7 @@ export async function createAdminAccount(
 }
 
 export async function createSession(
-	sql: Sql,
+	sql: Queryable,
 	input: { adminAccountId: string; tokenHash: string; expiresAt: Date },
 ): Promise<SessionRow> {
 	const rows = await sql`
@@ -267,7 +267,7 @@ export async function createSession(
 }
 
 export async function createProject(
-	sql: Sql,
+	sql: Queryable,
 	input: {
 		workspaceId: string;
 		name: string;
@@ -300,7 +300,7 @@ export async function createProject(
 }
 
 export async function createRelease(
-	sql: Sql,
+	sql: Queryable,
 	input: {
 		projectId: string;
 		name: string;
@@ -324,7 +324,7 @@ export async function createRelease(
 }
 
 export async function createFeature(
-	sql: Sql,
+	sql: Queryable,
 	input: {
 		projectId: string;
 		releaseId: string;
@@ -350,7 +350,7 @@ export async function createFeature(
 }
 
 export async function createTaskApproval(
-	sql: Sql,
+	sql: Queryable,
 	input: {
 		projectId: string;
 		featureId: string;
@@ -381,7 +381,7 @@ export async function createTaskApproval(
 }
 
 export async function createPullRequestIdentity(
-	sql: Sql,
+	sql: Queryable,
 	input: {
 		projectId: string;
 		featureId: string;

@@ -1,4 +1,4 @@
-import type { Sql } from "../client";
+import type { Queryable } from "../client";
 import {
 	createFeature,
 	createProject,
@@ -26,7 +26,7 @@ export interface DatabaseFixture {
 	featureInProject: (projectId: string, slug: string) => Promise<FeatureRow>;
 }
 
-export function createDatabaseFixture(sql: Sql): DatabaseFixture {
+export function createDatabaseFixture(sql: Queryable): DatabaseFixture {
 	return {
 		async twoProjects() {
 			const workspace = await createWorkspace(sql);

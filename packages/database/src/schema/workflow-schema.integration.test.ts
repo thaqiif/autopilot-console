@@ -3,14 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDatabaseClient, type DatabaseClient, type Sql } from "../client";
-import {
-	createAdminAccount,
-	createFeature,
-	createProject,
-	createRelease,
-	createTaskApproval,
-	createWorkspace,
-} from "../repositories/core-repositories";
+import { createAdminAccount, createTaskApproval } from "../repositories/core-repositories";
 import {
 	appendActivityEvent,
 	appendAuditEvent,
@@ -24,18 +17,17 @@ import {
 	createOutboxIntent,
 	createScheduledReconciliation,
 	createWorkerRegistration,
-	getDevelopmentAttempt,
 	heartbeatWorker,
 	renewLease,
 	updateAttemptStatus,
 } from "../repositories/workflow-repositories";
-import { applyCoreMigration, rollbackCoreMigration } from "./core-migration";
+import { createDatabaseFixture, type DatabaseFixture } from "../testing/database-fixture";
+import { applyCoreMigration } from "./core-migration";
 import {
 	applyWorkflowMigration,
 	rollbackWorkflowMigration,
 	WORKFLOW_VERSION,
 } from "./workflow-migration";
-import { createDatabaseFixture, type DatabaseFixture } from "../testing/database-fixture";
 
 const DATABASE_URL =
 	process.env.DATABASE_URL ??
@@ -189,16 +181,9 @@ describe("development job attempts", () => {
 		expect(attempt.enqueuedAt).toBeInstanceOf(Date);
 		expect(attempt.predecessorAttemptId).toBeNull();
 
-		const statuses = [
-			"QUEUED",
-			"RUNNING",
-			"CANCEL_REQUESTED",
-			"SUCCEEDED",
-			"FAILED",
-			"INTERRUPTED",
-			"CANCELLED",
-		] as const;
-		for (const status of statuses) {
+		// Non-active statuses can coexist; active statuses tested separately.
+		const terminalStatuses = ["QUEUED", "SUCCEEDED", "FAILED", "INTERRUPTED", "CANCELLED"] as const;
+		for (const status of terminalStatuses) {
 			const a = await createDevelopmentAttempt(sql, {
 				projectId: seed.projectA.id,
 				featureId: seed.featureA.id,
@@ -242,17 +227,26 @@ describe("development job attempts", () => {
 		expect(finished.exitCode).toBe(0);
 		expect(finished.structuredResult).toEqual({ allPassed: true, stuck: false });
 
-		const cancelled = await createDevelopmentAttempt(sql, {
+		// CANCEL_REQUESTED is a valid active status (only one active per project)
+		const cancelRequested = await createDevelopmentAttempt(sql, {
 			projectId: seed.projectA.id,
 			featureId: seed.featureA.id,
 			taskApprovalId: seed.approval.id,
 			branchName: seed.featureA.branchName,
-			operationKey: `cancel-${crypto.randomUUID()}`,
-			status: "CANCELLED",
+			operationKey: `cancel-req-${crypto.randomUUID()}`,
+			status: "CANCEL_REQUESTED",
 			cancellationRequestedAt: new Date(),
 			cancellationReason: "owner requested",
 		});
-		expect(cancelled.cancellationReason).toBe("owner requested");
+		expect(cancelRequested.status).toBe("CANCEL_REQUESTED");
+		expect(cancelRequested.cancellationReason).toBe("owner requested");
+
+		const cancelled = await updateAttemptStatus(sql, cancelRequested.id, {
+			status: "CANCELLED",
+			endedAt: new Date(),
+			cancellationReason: "owner requested",
+		});
+		expect(cancelled.status).toBe("CANCELLED");
 
 		// predecessor link for retry
 		const retry = await createDevelopmentAttempt(sql, {
@@ -432,8 +426,8 @@ describe("progress snapshots logs failures activity and audit", () => {
 		expect(snap1.id).not.toBe(snap2.id);
 
 		// progress snapshots are append-only (no update of content)
-		const snapErr = await mustReject(() =>
-			sql`UPDATE progress_snapshots SET source_version = 99 WHERE id = ${snap1.id}`,
+		const snapErr = await mustReject(
+			() => sql`UPDATE progress_snapshots SET source_version = 99 WHERE id = ${snap1.id}`,
 		);
 		expect(String(snapErr.message).toLowerCase()).toMatch(/immutable|append|cannot|trigger/);
 
@@ -446,8 +440,8 @@ describe("progress snapshots logs failures activity and audit", () => {
 			truncated: false,
 		});
 		expect(log.sequence).toBe(1);
-		const logErr = await mustReject(() =>
-			sql`UPDATE diagnostic_log_chunks SET body = 'x' WHERE id = ${log.id}`,
+		const logErr = await mustReject(
+			() => sql`UPDATE diagnostic_log_chunks SET body = 'x' WHERE id = ${log.id}`,
 		);
 		expect(String(logErr.message).toLowerCase()).toMatch(/immutable|append|cannot|trigger/);
 
@@ -461,8 +455,8 @@ describe("progress snapshots logs failures activity and audit", () => {
 			details: { exitCode: 1 },
 		});
 		expect(failure.category).toBe("process");
-		const failErr = await mustReject(() =>
-			sql`UPDATE failure_records SET summary = 'changed' WHERE id = ${failure.id}`,
+		const failErr = await mustReject(
+			() => sql`UPDATE failure_records SET summary = 'changed' WHERE id = ${failure.id}`,
 		);
 		expect(String(failErr.message).toLowerCase()).toMatch(/immutable|append|cannot|trigger/);
 
@@ -476,8 +470,8 @@ describe("progress snapshots logs failures activity and audit", () => {
 			metadata: { workerId: "w1" },
 		});
 		expect(activity.type).toBe("job.started");
-		const actErr = await mustReject(() =>
-			sql`UPDATE activity_events SET summary = 'nope' WHERE id = ${activity.id}`,
+		const actErr = await mustReject(
+			() => sql`UPDATE activity_events SET summary = 'nope' WHERE id = ${activity.id}`,
 		);
 		expect(String(actErr.message).toLowerCase()).toMatch(/immutable|append|cannot|trigger/);
 
@@ -500,8 +494,8 @@ describe("progress snapshots logs failures activity and audit", () => {
 		expect(audit.priorValues).toEqual({ status: "QUEUED" });
 		expect(audit.nextValues).toEqual({ status: "RUNNING" });
 		expect(audit.correlationId).toBe("corr-1");
-		const auditErr = await mustReject(() =>
-			sql`UPDATE audit_events SET action = 'tamper' WHERE id = ${audit.id}`,
+		const auditErr = await mustReject(
+			() => sql`UPDATE audit_events SET action = 'tamper' WHERE id = ${audit.id}`,
 		);
 		expect(String(auditErr.message).toLowerCase()).toMatch(/immutable|append|cannot|trigger/);
 

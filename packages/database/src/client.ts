@@ -1,7 +1,11 @@
 import postgres from "postgres";
 
+/** Full client with begin/end. */
 export type Sql = postgres.Sql;
+/** Nested transaction handle. */
 export type TransactionSql = postgres.TransactionSql;
+/** Query surface accepted by repositories (client or nested tx). */
+export type Queryable = postgres.Sql | postgres.TransactionSql;
 
 export interface DatabaseClient {
 	sql: Sql;
