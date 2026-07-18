@@ -8,6 +8,11 @@ import type {
 	ScheduleStatus,
 } from "../schema/enums";
 
+/** Cast JSON payloads for postgres.js without repeating the type assertion. */
+function asJson(sql: Queryable, value: unknown): ReturnType<Queryable["json"]> {
+	return sql.json(value as postgres.JSONValue);
+}
+
 export interface WorkerRegistrationRow {
 	id: string;
 	workerId: string;
@@ -391,7 +396,7 @@ export async function createDevelopmentAttempt(
 			${status === "RUNNING" || status === "CANCEL_REQUESTED" ? new Date() : null},
 			${input.cancellationRequestedAt ?? null},
 			${input.cancellationReason ?? null},
-			${input.structuredResult !== undefined ? sql.json(input.structuredResult as postgres.JSONValue) : null}
+			${input.structuredResult !== undefined ? asJson(sql, input.structuredResult) : null}
 		)
 		RETURNING *
 	`;
@@ -431,7 +436,7 @@ export async function updateAttemptStatus(
 			ended_at = COALESCE(${input.endedAt ?? null}, ended_at),
 			exit_code = COALESCE(${input.exitCode ?? null}, exit_code),
 			structured_result = COALESCE(
-				${input.structuredResult !== undefined ? sql.json(input.structuredResult as postgres.JSONValue) : null},
+				${input.structuredResult !== undefined ? asJson(sql, input.structuredResult) : null},
 				structured_result
 			),
 			cancellation_requested_at = COALESCE(${input.cancellationRequestedAt ?? null}, cancellation_requested_at),
@@ -495,8 +500,8 @@ export async function appendProgressSnapshot(
 			${input.featureId},
 			${input.attemptId},
 			${input.sourceVersion},
-			${sql.json(input.summary as postgres.JSONValue)},
-			${sql.json(input.requirements as postgres.JSONValue)}
+			${asJson(sql, input.summary)},
+			${asJson(sql, input.requirements)}
 		)
 		RETURNING *
 	`;
@@ -554,7 +559,7 @@ export async function appendFailureRecord(
 			${input.category},
 			${input.summary},
 			${input.recommendedAction},
-			${sql.json((input.details ?? {}) as postgres.JSONValue)}
+			${asJson(sql, input.details ?? {})}
 		)
 		RETURNING *
 	`;
@@ -584,7 +589,7 @@ export async function appendActivityEvent(
 			${input.type},
 			${input.summary},
 			${input.source},
-			${sql.json((input.metadata ?? {}) as postgres.JSONValue)}
+			${asJson(sql, input.metadata ?? {})}
 		)
 		RETURNING *
 	`;
@@ -627,12 +632,12 @@ export async function appendAuditEvent(
 			${input.result},
 			${
 				input.priorValues !== undefined && input.priorValues !== null
-					? sql.json(input.priorValues as postgres.JSONValue)
+					? asJson(sql, input.priorValues)
 					: null
 			},
 			${
 				input.nextValues !== undefined && input.nextValues !== null
-					? sql.json(input.nextValues as postgres.JSONValue)
+					? asJson(sql, input.nextValues)
 					: null
 			}
 		)
@@ -660,7 +665,7 @@ export async function createScheduledReconciliation(
 			${input.projectId ?? null},
 			${input.featureId ?? null},
 			${input.notBefore ?? new Date()},
-			${sql.json((input.payload ?? {}) as postgres.JSONValue)}
+			${asJson(sql, input.payload ?? {})}
 		)
 		RETURNING *
 	`;
@@ -707,7 +712,7 @@ export async function createOutboxIntent(
 			${input.attemptId ?? null},
 			${input.kind},
 			${input.dedupeKey},
-			${sql.json((input.payload ?? {}) as postgres.JSONValue)}
+			${asJson(sql, input.payload ?? {})}
 		)
 		RETURNING *
 	`;
@@ -751,7 +756,7 @@ export async function createIdempotencyRecord(
 			${input.projectId},
 			${input.featureId ?? null},
 			${input.attemptId ?? null},
-			${sql.json(input.result as postgres.JSONValue)}
+			${asJson(sql, input.result)}
 		)
 		RETURNING *
 	`;
