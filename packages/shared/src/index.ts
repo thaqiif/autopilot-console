@@ -8,12 +8,23 @@ export const packageName = "@autopilot-console/shared" as const;
 
 export {
 	loadRuntimeConfig,
-	safeSerializeConfig,
 	type NodeEnv,
 	type RuntimeConfig,
 	type SafeRuntimeConfig,
-} from "./config/runtime-config.ts";
-
+	safeSerializeConfig,
+} from "./config/runtime-config";
+export type {
+	ApiFailure,
+	ApiResponse,
+	ApiSuccess,
+	CursorPage,
+	RequestContext,
+} from "./contracts/api";
+export type {
+	ActivityCategory,
+	ActivityEventDraft,
+	AuditEventDraft,
+} from "./contracts/events";
 export {
 	asFeatureId,
 	asJobAttemptId,
@@ -27,52 +38,34 @@ export {
 	type PullRequestId,
 	type ReleaseId,
 	type SessionId,
-} from "./contracts/ids.ts";
-
+} from "./contracts/ids";
 export {
 	formatUtcIso,
 	isUtcIso,
 	nowUtcIso,
 	parseUtcIso,
-} from "./contracts/time.ts";
-
-export type {
-	ApiFailure,
-	ApiResponse,
-	ApiSuccess,
-	CursorPage,
-	RequestContext,
-} from "./contracts/api.ts";
-
-export type {
-	ActivityCategory,
-	ActivityEventDraft,
-	AuditEventDraft,
-} from "./contracts/events.ts";
-
+} from "./contracts/time";
+export {
+	createNormalizedError,
+	type ErrorCode,
+	errorCodes,
+	NormalizedError,
+	type NormalizedErrorInit,
+	type NormalizedErrorJSON,
+} from "./errors/normalized-error";
 export {
 	createOperationKey,
-	parseOperationKey,
 	type OperationKeyParts,
 	type OperationName,
 	type ParsedOperationKey,
-} from "./idempotency/operation-key.ts";
-
+	parseOperationKey,
+} from "./idempotency/operation-key";
 export {
-	childCorrelation,
-	createCorrelationId,
 	type CorrelationContext,
 	type CorrelationOptions,
 	type CorrelationScope,
-} from "./observability/correlation.ts";
+	childCorrelation,
+	createCorrelationId,
+} from "./observability/correlation";
 
-export {
-	createNormalizedError,
-	errorCodes,
-	NormalizedError,
-	type ErrorCode,
-	type NormalizedErrorInit,
-	type NormalizedErrorJSON,
-} from "./errors/normalized-error.ts";
-
-export { redactSecrets, redactValue } from "./security/redaction.ts";
+export { redactSecrets, redactValue } from "./security/redaction";

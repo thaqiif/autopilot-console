@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { redactSecrets, redactValue } from "./redaction.ts";
+import { redactSecrets, redactValue } from "./redaction";
 
 describe("redactSecrets", () => {
 	test("redacts Authorization headers and bearer tokens", () => {

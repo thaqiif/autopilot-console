@@ -1,5 +1,5 @@
-import type { ErrorCode } from "../errors/normalized-error.ts";
-import type { CorrelationScope } from "../observability/correlation.ts";
+import type { ErrorCode } from "../errors/normalized-error";
+import type { CorrelationScope } from "../observability/correlation";
 
 /** Envelope for successful API responses. */
 export interface ApiSuccess<T> {

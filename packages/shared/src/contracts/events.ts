@@ -1,4 +1,4 @@
-import type { FeatureId, JobAttemptId, ProjectId, ReleaseId } from "./ids.ts";
+import type { FeatureId, JobAttemptId, ProjectId, ReleaseId } from "./ids";
 
 /** High-level activity categories recorded for the portfolio timeline. */
 export type ActivityCategory =

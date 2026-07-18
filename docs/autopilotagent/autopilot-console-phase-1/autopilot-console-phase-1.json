@@ -152,15 +152,15 @@
         "test": {
           "description": "Write runtime-config and redaction tests covering missing and unsafe configuration, bounds, safe serialization, token/cookie/URL redaction, false-positive preservation, operation-key stability, and UTC contract validation; verify the tests fail with no implementation.",
           "file": "packages/shared/src/config/runtime-config.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement schema-validated configuration and the shared contract, ID, time, error, correlation, idempotency, and redaction modules with a single public package entrypoint.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Consolidate duplicated validation and safe-serialization behavior, keep error codes stable and exhaustively typed, and rerun shared tests, typecheck, and lint.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -168,7 +168,7 @@
         "Run the redaction suite with representative gh, Git, process, cookie, and authorization output.",
         "Verify the shared package dependency graph has no adapter or app dependencies."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "3",

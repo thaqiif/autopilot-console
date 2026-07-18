@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { createNormalizedError, errorCodes, NormalizedError } from "../errors/normalized-error";
+import { createOperationKey, parseOperationKey } from "../idempotency/operation-key";
+import { type CorrelationScope, createCorrelationId } from "../observability/correlation";
 import {
 	asFeatureId,
 	asJobAttemptId,
@@ -8,15 +11,8 @@ import {
 	type JobAttemptId,
 	type ProjectId,
 	type ReleaseId,
-} from "./ids.ts";
-import { createOperationKey, parseOperationKey } from "../idempotency/operation-key.ts";
-import { createCorrelationId, type CorrelationScope } from "../observability/correlation.ts";
-import { formatUtcIso, isUtcIso, parseUtcIso } from "./time.ts";
-import {
-	NormalizedError,
-	createNormalizedError,
-	errorCodes,
-} from "../errors/normalized-error.ts";
+} from "./ids";
+import { formatUtcIso, isUtcIso, parseUtcIso } from "./time";
 
 describe("typed identifiers", () => {
 	test("create branded ids and serialize cleanly as strings", () => {

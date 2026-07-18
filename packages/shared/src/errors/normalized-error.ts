@@ -1,4 +1,4 @@
-import { redactValue } from "../security/redaction.ts";
+import { redactValue } from "../security/redaction";
 
 export const errorCodes = {
 	UNAUTHORIZED: "UNAUTHORIZED",

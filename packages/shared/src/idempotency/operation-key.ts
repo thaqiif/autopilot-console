@@ -1,4 +1,4 @@
-import type { FeatureId, JobAttemptId, ProjectId } from "../contracts/ids.ts";
+import type { FeatureId, JobAttemptId, ProjectId } from "../contracts/ids";
 
 export type OperationName =
 	| "approve_and_queue"

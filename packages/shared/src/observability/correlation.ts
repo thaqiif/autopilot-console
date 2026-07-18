@@ -1,11 +1,4 @@
-export type CorrelationScope =
-	| "http"
-	| "job"
-	| "process"
-	| "git"
-	| "github"
-	| "activity"
-	| "audit";
+export type CorrelationScope = "http" | "job" | "process" | "git" | "github" | "activity" | "audit";
 
 export interface CorrelationOptions {
 	parent?: string;

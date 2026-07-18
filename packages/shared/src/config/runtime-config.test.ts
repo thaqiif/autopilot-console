@@ -1,11 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import {
-	loadRuntimeConfig,
-	type RuntimeConfig,
-	safeSerializeConfig,
-} from "./runtime-config.ts";
+import { loadRuntimeConfig, type RuntimeConfig, safeSerializeConfig } from "./runtime-config";
 
-function validEnv(overrides: Record<string, string | undefined> = {}): Record<string, string | undefined> {
+function validEnv(
+	overrides: Record<string, string | undefined> = {},
+): Record<string, string | undefined> {
 	return {
 		DATABASE_URL: "postgres://localhost:5432/autopilot",
 		ADMIN_BOOTSTRAP_PASSWORD: "Str0ng-P@ssw0rd-Enough!",
@@ -31,63 +29,47 @@ describe("loadRuntimeConfig", () => {
 	});
 
 	test("rejects missing database settings", () => {
-		expect(() => loadRuntimeConfig(validEnv({ DATABASE_URL: undefined }))).toThrow(
-			/database/i,
-		);
+		expect(() => loadRuntimeConfig(validEnv({ DATABASE_URL: undefined }))).toThrow(/database/i);
 		expect(() => loadRuntimeConfig(validEnv({ DATABASE_URL: "" }))).toThrow(/database/i);
 		expect(() => loadRuntimeConfig(validEnv({ DATABASE_URL: "   " }))).toThrow(/database/i);
 	});
 
 	test("rejects missing session secret", () => {
-		expect(() => loadRuntimeConfig(validEnv({ SESSION_SECRET: undefined }))).toThrow(
-			/session/i,
-		);
+		expect(() => loadRuntimeConfig(validEnv({ SESSION_SECRET: undefined }))).toThrow(/session/i);
 	});
 
 	test("rejects empty workspace-root allowlists", () => {
-		expect(() => loadRuntimeConfig(validEnv({ WORKSPACE_ROOTS: undefined }))).toThrow(
-			/workspace/i,
-		);
+		expect(() => loadRuntimeConfig(validEnv({ WORKSPACE_ROOTS: undefined }))).toThrow(/workspace/i);
 		expect(() => loadRuntimeConfig(validEnv({ WORKSPACE_ROOTS: "" }))).toThrow(/workspace/i);
-		expect(() => loadRuntimeConfig(validEnv({ WORKSPACE_ROOTS: " , , " }))).toThrow(
-			/workspace/i,
-		);
+		expect(() => loadRuntimeConfig(validEnv({ WORKSPACE_ROOTS: " , , " }))).toThrow(/workspace/i);
 	});
 
 	test("rejects invalid concurrency limits", () => {
-		expect(() => loadRuntimeConfig(validEnv({ MAX_CONCURRENT_JOBS: "0" }))).toThrow(
-			/concurren/i,
-		);
-		expect(() => loadRuntimeConfig(validEnv({ MAX_CONCURRENT_JOBS: "-1" }))).toThrow(
-			/concurren/i,
-		);
-		expect(() => loadRuntimeConfig(validEnv({ MAX_CONCURRENT_JOBS: "11" }))).toThrow(
-			/concurren/i,
-		);
-		expect(() => loadRuntimeConfig(validEnv({ MAX_CONCURRENT_JOBS: "abc" }))).toThrow(
-			/concurren/i,
-		);
+		expect(() => loadRuntimeConfig(validEnv({ MAX_CONCURRENT_JOBS: "0" }))).toThrow(/concurren/i);
+		expect(() => loadRuntimeConfig(validEnv({ MAX_CONCURRENT_JOBS: "-1" }))).toThrow(/concurren/i);
+		expect(() => loadRuntimeConfig(validEnv({ MAX_CONCURRENT_JOBS: "11" }))).toThrow(/concurren/i);
+		expect(() => loadRuntimeConfig(validEnv({ MAX_CONCURRENT_JOBS: "abc" }))).toThrow(/concurren/i);
 	});
 
 	test("rejects invalid polling limits", () => {
-		expect(() =>
-			loadRuntimeConfig(validEnv({ GITHUB_POLL_INTERVAL_SECONDS: "0" })),
-		).toThrow(/poll/i);
-		expect(() =>
-			loadRuntimeConfig(validEnv({ GITHUB_POLL_INTERVAL_SECONDS: "-5" })),
-		).toThrow(/poll/i);
-		expect(() =>
-			loadRuntimeConfig(validEnv({ GITHUB_POLL_INTERVAL_SECONDS: "99999" })),
-		).toThrow(/poll/i);
-		expect(() =>
-			loadRuntimeConfig(validEnv({ GITHUB_POLL_INTERVAL_SECONDS: "nope" })),
-		).toThrow(/poll/i);
+		expect(() => loadRuntimeConfig(validEnv({ GITHUB_POLL_INTERVAL_SECONDS: "0" }))).toThrow(
+			/poll/i,
+		);
+		expect(() => loadRuntimeConfig(validEnv({ GITHUB_POLL_INTERVAL_SECONDS: "-5" }))).toThrow(
+			/poll/i,
+		);
+		expect(() => loadRuntimeConfig(validEnv({ GITHUB_POLL_INTERVAL_SECONDS: "99999" }))).toThrow(
+			/poll/i,
+		);
+		expect(() => loadRuntimeConfig(validEnv({ GITHUB_POLL_INTERVAL_SECONDS: "nope" }))).toThrow(
+			/poll/i,
+		);
 	});
 
 	test("rejects weak bootstrap passwords", () => {
-		expect(() =>
-			loadRuntimeConfig(validEnv({ ADMIN_BOOTSTRAP_PASSWORD: undefined })),
-		).toThrow(/password/i);
+		expect(() => loadRuntimeConfig(validEnv({ ADMIN_BOOTSTRAP_PASSWORD: undefined }))).toThrow(
+			/password/i,
+		);
 		expect(() => loadRuntimeConfig(validEnv({ ADMIN_BOOTSTRAP_PASSWORD: "" }))).toThrow(
 			/password/i,
 		);

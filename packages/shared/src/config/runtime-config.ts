@@ -27,10 +27,7 @@ const DEFAULT_POLL_INTERVAL_SECONDS = 60;
 const MAX_CONCURRENT_JOBS_LIMIT = 10;
 const MAX_POLL_INTERVAL_SECONDS = 3600;
 
-function readString(
-	env: Record<string, string | undefined>,
-	key: string,
-): string | undefined {
+function readString(env: Record<string, string | undefined>, key: string): string | undefined {
 	const raw = env[key];
 	if (raw === undefined) return undefined;
 	const trimmed = raw.trim();
@@ -74,9 +71,7 @@ function assertStrongPassword(password: string | undefined): string {
 		throw new Error("Missing admin bootstrap password");
 	}
 	if (password.length < MIN_PASSWORD_LENGTH) {
-		throw new Error(
-			`Weak bootstrap password: must be at least ${MIN_PASSWORD_LENGTH} characters`,
-		);
+		throw new Error(`Weak bootstrap password: must be at least ${MIN_PASSWORD_LENGTH} characters`);
 	}
 	if (!/[a-z]/.test(password)) {
 		throw new Error("Weak bootstrap password: must include a lowercase letter");
@@ -121,9 +116,7 @@ export function loadRuntimeConfig(
 		);
 	}
 
-	const bootstrapPassword = assertStrongPassword(
-		readString(env, "ADMIN_BOOTSTRAP_PASSWORD"),
-	);
+	const bootstrapPassword = assertStrongPassword(readString(env, "ADMIN_BOOTSTRAP_PASSWORD"));
 
 	const maxConcurrentJobs = parsePositiveInt(
 		readString(env, "MAX_CONCURRENT_JOBS"),
