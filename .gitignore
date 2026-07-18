@@ -13,3 +13,4 @@ coverage/
 docs/autopilotagent/**/run.pid
 docs/autopilotagent/**/loop-state.md
 docs/autopilotagent/**/stop-signal
+core.*
