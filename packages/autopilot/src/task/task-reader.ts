@@ -43,7 +43,8 @@ export function parseTaskBytes(bytes: Uint8Array | Buffer): ParseResult {
 		return { ok: false, errors: ["Empty task file"] };
 	}
 
-	const sourceBytes = bytes instanceof Buffer ? new Uint8Array(bytes) : new Uint8Array(bytes);
+	// Copy so checksum/hash owns independent bytes (callers may reuse Buffer).
+	const sourceBytes = new Uint8Array(bytes);
 
 	let text: string;
 	try {

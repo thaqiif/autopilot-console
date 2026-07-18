@@ -10,22 +10,28 @@ export {
 	type AtomicReadOk,
 	type AtomicReadOptions,
 	type AtomicReadResult,
+	parseTaskBytes,
+	readTaskFileAtomic,
+} from "./task/task-reader";
+export type {
+	ParsedTaskBytes,
+	ParseErr,
+	ParseOk,
+	ParseResult,
+} from "./task/task-reader-types";
+export type {
+	RequirementWire,
+	TaskDocument,
+	TaskRunMode,
+	ValidationResult,
+} from "./task/task-schema";
+export { TASK_SCHEMA_COMPATIBILITY_VERSION } from "./task/task-schema";
+export { validateTaskDocument } from "./task/task-semantic-validator";
+export {
 	createTaskApprovalSnapshot,
 	evaluateAllPass,
-	type ParsedTaskBytes,
-	type ParseErr,
-	type ParseOk,
-	type ParseResult,
-	parseTaskBytes,
 	type RequirementSummary,
-	type RequirementWire,
-	readTaskFileAtomic,
 	summarizeTaskFile,
-	TASK_SCHEMA_COMPATIBILITY_VERSION,
 	type TaskApprovalSnapshot,
-	type TaskDocument,
-	type TaskRunMode,
 	type TaskSummary,
-	type ValidationResult,
-	validateTaskDocument,
-} from "./task/task-reader";
+} from "./task/task-snapshot";

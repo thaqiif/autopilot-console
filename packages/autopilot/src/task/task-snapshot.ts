@@ -12,7 +12,7 @@ export interface TaskApprovalSnapshot {
 	schemaCompatibilityVersion: typeof TASK_SCHEMA_COMPATIBILITY_VERSION;
 	/** Safe project-relative path. */
 	relativePath: string;
-	/** Deep-cloned requirements array as approved. */
+	/** Deep-cloned requirements array as approved (same array as document.requirements). */
 	requirements: RequirementWire[];
 	/** Full document deep-cloned for audit. */
 	document: TaskDocument;
@@ -52,21 +52,18 @@ export interface TaskSummary {
 	requirements: RequirementSummary[];
 }
 
-function deepClone<T>(value: T): T {
-	return structuredClone(value);
-}
-
 export function createTaskApprovalSnapshot(input: {
 	parsed: ParsedTaskBytes;
 	relativePath: string;
 }): TaskApprovalSnapshot {
 	const { parsed, relativePath } = input;
+	const document = structuredClone(parsed.document);
 	return {
 		checksum: parsed.checksum,
 		schemaCompatibilityVersion: TASK_SCHEMA_COMPATIBILITY_VERSION,
 		relativePath,
-		requirements: deepClone(parsed.document.requirements),
-		document: deepClone(parsed.document),
+		requirements: document.requirements,
+		document,
 		byteLength: parsed.sourceBytes.byteLength,
 	};
 }
@@ -78,9 +75,16 @@ export function evaluateAllPass(document: TaskDocument): boolean {
 }
 
 export function summarizeTaskFile(document: TaskDocument): TaskSummary {
-	const requirements: RequirementSummary[] = document.requirements.map((r) => {
+	let passed = 0;
+	let stuck = 0;
+	let invalidTest = 0;
+	let pending = 0;
+	const blockedReasons: Array<{ id: string; reason: string }> = [];
+	const requirements: RequirementSummary[] = [];
+
+	for (const r of document.requirements) {
 		const tdd = r.tdd;
-		return {
+		const summary: RequirementSummary = {
 			id: r.id,
 			description: r.description,
 			dependsOn: r.dependsOn ? [...r.dependsOn] : [],
@@ -96,27 +100,20 @@ export function summarizeTaskFile(document: TaskDocument): TaskSummary {
 				refactor: tdd?.refactor?.passes === true,
 			},
 		};
-	});
+		requirements.push(summary);
 
-	let passed = 0;
-	let stuck = 0;
-	let invalidTest = 0;
-	const blockedReasons: Array<{ id: string; reason: string }> = [];
-
-	for (const r of requirements) {
-		if (r.passes) passed += 1;
-		if (r.stuck) {
+		if (summary.passes) passed += 1;
+		if (summary.stuck) {
 			stuck += 1;
-			if (r.blockedReason) {
-				blockedReasons.push({ id: r.id, reason: r.blockedReason });
+			if (summary.blockedReason) {
+				blockedReasons.push({ id: summary.id, reason: summary.blockedReason });
 			}
 		}
-		if (r.invalidTest) invalidTest += 1;
+		if (summary.invalidTest) invalidTest += 1;
+		if (!summary.passes && !summary.stuck && !summary.invalidTest) pending += 1;
 	}
 
 	const total = requirements.length;
-	// Pending: incomplete work that is not stuck and not invalidTest.
-	const pending = requirements.filter((r) => !r.passes && !r.stuck && !r.invalidTest).length;
 
 	return {
 		name: document.name,
@@ -132,7 +129,7 @@ export function summarizeTaskFile(document: TaskDocument): TaskSummary {
 		stuck,
 		invalidTest,
 		pending,
-		allPass: evaluateAllPass(document),
+		allPass: total > 0 && passed === total,
 		blockedReasons,
 		requirements,
 	};
