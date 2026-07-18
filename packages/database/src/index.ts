@@ -27,7 +27,7 @@ export {
 	applyCoreMigration,
 	CORE_VERSION,
 	rollbackCoreMigration,
-} from "./schema/core";
+} from "./schema/core-migration";
 export {
 	type FeatureState,
 	featureStates,

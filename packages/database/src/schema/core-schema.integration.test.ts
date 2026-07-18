@@ -14,7 +14,7 @@ import {
 	createWorkspace,
 	getWorkspace,
 } from "../repositories/core-repositories";
-import { applyCoreMigration, rollbackCoreMigration } from "../schema/core";
+import { applyCoreMigration, rollbackCoreMigration } from "../schema/core-migration";
 import { createDatabaseFixture, type DatabaseFixture } from "../testing/database-fixture";
 
 const DATABASE_URL =
