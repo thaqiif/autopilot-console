@@ -1,24 +1,17 @@
-import {
-	afterAll,
-	beforeAll,
-	beforeEach,
-	describe,
-	expect,
-	test,
-} from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createDatabaseClient, type DatabaseClient, type Sql } from "../client";
+import type { FeatureRow, ProjectRow } from "../repositories/core-repositories";
 import { createAdminAccount, createTaskApproval } from "../repositories/core-repositories";
 import {
 	createDevelopmentAttempt,
 	createWorkerRegistration,
 	getDevelopmentAttempt,
 } from "../repositories/workflow-repositories";
-import { createDatabaseFixture, type DatabaseFixture } from "../testing/database-fixture";
 import { applyCoreMigration } from "../schema/core-migration";
 import { applyWorkflowMigration } from "../schema/workflow-migration";
+import { createDatabaseFixture, type DatabaseFixture } from "../testing/database-fixture";
 import { createDevelopmentQueue, type DevelopmentQueue } from "./development-queue";
 import { createLeaseReconciler, type LeaseReconciler } from "./lease-reconciler";
-import type { FeatureRow, ProjectRow } from "../repositories/core-repositories";
 
 const DATABASE_URL =
 	process.env.DATABASE_URL ??
@@ -168,28 +161,51 @@ describe("development queue", () => {
 		const base = await fixture.featureReady();
 		const { approvalId } = await seedApprovedFeature(sql, base.projectA, base.featureA);
 
-		await seedQueuedAttempt(sql, base.projectA.id, base.featureA.id, approvalId, base.featureA.branchName, {
-			enqueueAt: new Date("2026-07-18T00:01:00Z"),
-		});
-		await seedQueuedAttempt(sql, base.projectA.id, base.featureA.id, approvalId, base.featureA.branchName, {
-			enqueueAt: new Date("2026-07-18T00:00:00Z"),
-		});
-		await seedQueuedAttempt(sql, base.projectA.id, base.featureA.id, approvalId, base.featureA.branchName, {
-			enqueueAt: new Date("2026-07-18T00:02:00Z"),
-		});
+		await seedQueuedAttempt(
+			sql,
+			base.projectA.id,
+			base.featureA.id,
+			approvalId,
+			base.featureA.branchName,
+			{
+				enqueueAt: new Date("2026-07-18T00:01:00Z"),
+			},
+		);
+		await seedQueuedAttempt(
+			sql,
+			base.projectA.id,
+			base.featureA.id,
+			approvalId,
+			base.featureA.branchName,
+			{
+				enqueueAt: new Date("2026-07-18T00:00:00Z"),
+			},
+		);
+		await seedQueuedAttempt(
+			sql,
+			base.projectA.id,
+			base.featureA.id,
+			approvalId,
+			base.featureA.branchName,
+			{
+				enqueueAt: new Date("2026-07-18T00:02:00Z"),
+			},
+		);
 
 		await createWorkerRegistration(sql, { workerId, hostname: "test-host" });
 
 		const claimed = await queue.claimNextAttempt(workerId);
 		expect(claimed).not.toBeNull();
-		expect(claimed!.attempt.status).toBe("RUNNING");
-		expect(claimed!.attempt.workerRegistrationId).toBeTruthy();
-		expect(claimed!.attempt.leaseExpiresAt).not.toBeNull();
-		expect(claimed!.attempt.startedAt).not.toBeNull();
-		expect(claimed!.attempt.heartbeatAt).not.toBeNull();
+		// biome-ignore lint/style/noNonNullAssertion: verified non-null above
+		const c = claimed!;
+		expect(c.attempt.status).toBe("RUNNING");
+		expect(c.attempt.workerRegistrationId).toBeTruthy();
+		expect(c.attempt.leaseExpiresAt).not.toBeNull();
+		expect(c.attempt.startedAt).not.toBeNull();
+		expect(c.attempt.heartbeatAt).not.toBeNull();
 
-		const fetched = await getDevelopmentAttempt(sql, claimed!.attempt.id);
-		expect(fetched!.enqueuedAt.getTime()).toBe(new Date("2026-07-18T00:00:00Z").getTime());
+		const fetched = await getDevelopmentAttempt(sql, c.attempt.id);
+		expect(fetched?.enqueuedAt.getTime()).toBe(new Date("2026-07-18T00:00:00Z").getTime());
 	});
 
 	test("does not claim any attempt when none are QUEUED", async () => {
@@ -201,7 +217,13 @@ describe("development queue", () => {
 	test("does not claim when worker registration does not exist", async () => {
 		const base = await fixture.featureReady();
 		const { approvalId } = await seedApprovedFeature(sql, base.projectA, base.featureA);
-		await seedQueuedAttempt(sql, base.projectA.id, base.featureA.id, approvalId, base.featureA.branchName);
+		await seedQueuedAttempt(
+			sql,
+			base.projectA.id,
+			base.featureA.id,
+			approvalId,
+			base.featureA.branchName,
+		);
 
 		const claimed = await queue.claimNextAttempt("nonexistent-worker");
 		expect(claimed).toBeNull();
@@ -211,12 +233,26 @@ describe("development queue", () => {
 		const base = await fixture.featureReady();
 		const { approvalId } = await seedApprovedFeature(sql, base.projectA, base.featureA);
 
-		await seedQueuedAttempt(sql, base.projectA.id, base.featureA.id, approvalId, base.featureA.branchName, {
-			enqueueAt: new Date("2026-07-18T00:00:00Z"),
-		});
-		await seedQueuedAttempt(sql, base.projectA.id, base.featureA.id, approvalId, base.featureA.branchName, {
-			enqueueAt: new Date("2026-07-18T00:01:00Z"),
-		});
+		await seedQueuedAttempt(
+			sql,
+			base.projectA.id,
+			base.featureA.id,
+			approvalId,
+			base.featureA.branchName,
+			{
+				enqueueAt: new Date("2026-07-18T00:00:00Z"),
+			},
+		);
+		await seedQueuedAttempt(
+			sql,
+			base.projectA.id,
+			base.featureA.id,
+			approvalId,
+			base.featureA.branchName,
+			{
+				enqueueAt: new Date("2026-07-18T00:01:00Z"),
+			},
+		);
 
 		await createWorkerRegistration(sql, { workerId, hostname: "test-host" });
 
@@ -244,10 +280,15 @@ describe("development queue", () => {
 			operationKey: `running:${crypto.randomUUID()}`,
 			status: "RUNNING",
 			workerRegistrationId: existingWorker.id,
-			startedAt: new Date(),
 		});
 
-		await seedQueuedAttempt(sql, base.projectA.id, base.featureA.id, approvalId, base.featureA.branchName);
+		await seedQueuedAttempt(
+			sql,
+			base.projectA.id,
+			base.featureA.id,
+			approvalId,
+			base.featureA.branchName,
+		);
 
 		await createWorkerRegistration(sql, { workerId, hostname: "test-host" });
 
@@ -288,6 +329,7 @@ describe("development queue", () => {
 		for (let i = 0; i < 4; i++) {
 			const result = await queue.claimNextAttempt(workerId);
 			expect(result).not.toBeNull();
+			// biome-ignore lint/style/noNonNullAssertion: verified non-null above
 			claims.push({ projectId: result!.attempt.projectId });
 		}
 
@@ -339,7 +381,13 @@ describe("development queue", () => {
 	test("claim is transactional — on concurrent race only one worker obtains the attempt", async () => {
 		const base = await fixture.featureReady();
 		const { approvalId } = await seedApprovedFeature(sql, base.projectA, base.featureA);
-		await seedQueuedAttempt(sql, base.projectA.id, base.featureA.id, approvalId, base.featureA.branchName);
+		await seedQueuedAttempt(
+			sql,
+			base.projectA.id,
+			base.featureA.id,
+			approvalId,
+			base.featureA.branchName,
+		);
 
 		await createWorkerRegistration(sql, { workerId, hostname: "test-host" });
 
@@ -397,7 +445,6 @@ describe("lease reconciler", () => {
 			operationKey: `approve_and_queue:${crypto.randomUUID()}`,
 			status: "RUNNING",
 			workerRegistrationId: workerReg.id,
-			startedAt: clock.now(),
 			leaseExpiresAt: new Date(clock.now().getTime() + 30_000),
 			heartbeatAt: clock.now(),
 		});
@@ -418,7 +465,7 @@ describe("lease reconciler", () => {
 		expect(count).toBe(1);
 
 		const attempt = await getDevelopmentAttempt(sql, attemptId);
-		expect(attempt!.status).toBe("INTERRUPTED");
+		expect(attempt?.status).toBe("INTERRUPTED");
 	});
 
 	test("does not mark non-expired leases", async () => {
@@ -429,7 +476,7 @@ describe("lease reconciler", () => {
 		expect(count).toBe(0);
 
 		const attempt = await getDevelopmentAttempt(sql, attemptId);
-		expect(attempt!.status).toBe("RUNNING");
+		expect(attempt?.status).toBe("RUNNING");
 	});
 
 	test("marks multiple expired attempts across different projects", async () => {
@@ -449,7 +496,6 @@ describe("lease reconciler", () => {
 			operationKey: `approve_and_queue:${crypto.randomUUID()}`,
 			status: "RUNNING",
 			workerRegistrationId: wr2.id,
-			startedAt: clock.now(),
 			leaseExpiresAt: new Date(clock.now().getTime() + 30_000),
 			heartbeatAt: clock.now(),
 		});
@@ -513,7 +559,7 @@ describe("heartbeat (via renewLease)", () => {
 			workerRegistrationId: wr.id,
 			leaseExpiresAt: new Date(Date.now() + 60_000),
 		});
-		expect(renewed.leaseExpiresAt!.getTime()).toBeGreaterThan(Date.now());
+		expect(renewed.leaseExpiresAt?.getTime()).toBeGreaterThan(Date.now());
 
 		const wrongId = "00000000-0000-0000-0000-000000000000";
 		await expect(
