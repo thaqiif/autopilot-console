@@ -1,0 +1,226 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Gens-ai/autopilotagent/main/autopilotagent.schema.json",
+  "version": "1.0.0",
+  "project": {
+    "type": "typescript",
+    "conventions": {
+      "testFilePattern": "*.test.ts",
+      "testDirectory": "tests",
+      "sourceDirectory": "apps"
+    }
+  },
+  "feedbackLoops": {
+    "typecheck": {
+      "command": "bun run typecheck",
+      "enabled": true
+    },
+    "tests": {
+      "command": "bun test",
+      "enabled": true
+    },
+    "lint": {
+      "command": "bun run lint",
+      "enabled": true
+    }
+  },
+  "iterations": {
+    "tasks": 15,
+    "tests": 10,
+    "lint": 15,
+    "entropy": 10
+  },
+  "server": {
+    "type": "github",
+    "owner": "thaqiif",
+    "repo": "autopilot-console",
+    "mcp": null
+  },
+  "codebase": {
+    "patterns": [
+      "TypeScript",
+      "Bun monorepo",
+      "React",
+      "Vite",
+      "Hono",
+      "PostgreSQL",
+      "Biome"
+    ],
+    "architecture": "Greenfield Bun monorepo control plane: apps/web (React+Vite), apps/api (Hono), apps/worker, packages/{database,domain,shared,autopilot,github,git}; PostgreSQL source of truth; orchestrates autopilot-multi without reimplementing TDD engine.",
+    "dependencies": [
+      "Bun",
+      "PostgreSQL",
+      "React",
+      "Vite",
+      "Hono",
+      "Biome",
+      "autopilot-multi",
+      "gh"
+    ]
+  },
+  "workspaces": {
+    "enabled": true,
+    "packages": {
+      "web": {
+        "path": "apps/web",
+        "feedbackLoops": {
+          "typecheck": {
+            "command": "bun run --filter web typecheck",
+            "enabled": true
+          },
+          "tests": {
+            "command": "bun test apps/web",
+            "enabled": true
+          },
+          "lint": {
+            "command": "bun run --filter web lint",
+            "enabled": true
+          }
+        }
+      },
+      "api": {
+        "path": "apps/api",
+        "feedbackLoops": {
+          "typecheck": {
+            "command": "bun run --filter api typecheck",
+            "enabled": true
+          },
+          "tests": {
+            "command": "bun test apps/api",
+            "enabled": true,
+            "sandbox": false
+          },
+          "lint": {
+            "command": "bun run --filter api lint",
+            "enabled": true
+          }
+        }
+      },
+      "worker": {
+        "path": "apps/worker",
+        "feedbackLoops": {
+          "typecheck": {
+            "command": "bun run --filter worker typecheck",
+            "enabled": true
+          },
+          "tests": {
+            "command": "bun test apps/worker",
+            "enabled": true,
+            "sandbox": false
+          },
+          "lint": {
+            "command": "bun run --filter worker lint",
+            "enabled": true
+          }
+        }
+      },
+      "database": {
+        "path": "packages/database",
+        "feedbackLoops": {
+          "typecheck": {
+            "command": "bun run --filter database typecheck",
+            "enabled": true
+          },
+          "tests": {
+            "command": "bun test packages/database",
+            "enabled": true,
+            "sandbox": false
+          },
+          "lint": {
+            "command": "bun run --filter database lint",
+            "enabled": true
+          }
+        }
+      },
+      "domain": {
+        "path": "packages/domain",
+        "feedbackLoops": {
+          "typecheck": {
+            "command": "bun run --filter domain typecheck",
+            "enabled": true
+          },
+          "tests": {
+            "command": "bun test packages/domain",
+            "enabled": true
+          },
+          "lint": {
+            "command": "bun run --filter domain lint",
+            "enabled": true
+          }
+        }
+      },
+      "shared": {
+        "path": "packages/shared",
+        "feedbackLoops": {
+          "typecheck": {
+            "command": "bun run --filter shared typecheck",
+            "enabled": true
+          },
+          "tests": {
+            "command": "bun test packages/shared",
+            "enabled": true
+          },
+          "lint": {
+            "command": "bun run --filter shared lint",
+            "enabled": true
+          }
+        }
+      },
+      "autopilot": {
+        "path": "packages/autopilot",
+        "feedbackLoops": {
+          "typecheck": {
+            "command": "bun run --filter autopilot typecheck",
+            "enabled": true
+          },
+          "tests": {
+            "command": "bun test packages/autopilot",
+            "enabled": true
+          },
+          "lint": {
+            "command": "bun run --filter autopilot lint",
+            "enabled": true
+          }
+        }
+      },
+      "github": {
+        "path": "packages/github",
+        "feedbackLoops": {
+          "typecheck": {
+            "command": "bun run --filter github typecheck",
+            "enabled": true
+          },
+          "tests": {
+            "command": "bun test packages/github",
+            "enabled": true
+          },
+          "lint": {
+            "command": "bun run --filter github lint",
+            "enabled": true
+          }
+        }
+      },
+      "git": {
+        "path": "packages/git",
+        "feedbackLoops": {
+          "typecheck": {
+            "command": "bun run --filter git typecheck",
+            "enabled": true
+          },
+          "tests": {
+            "command": "bun test packages/git",
+            "enabled": true
+          },
+          "lint": {
+            "command": "bun run --filter git lint",
+            "enabled": true
+          }
+        }
+      }
+    }
+  },
+  "analytics": {
+    "enabled": true,
+    "directory": "docs/autopilotagent/analytics",
+    "thrashingThreshold": 3
+  }
+}

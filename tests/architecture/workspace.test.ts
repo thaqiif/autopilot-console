@@ -1,30 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "../..");
 
 const APPS = ["web", "api", "worker"] as const;
-const PACKAGES = [
-	"database",
-	"domain",
-	"shared",
-	"autopilot",
-	"github",
-	"git",
-] as const;
+const PACKAGES = ["database", "domain", "shared", "autopilot", "github", "git"] as const;
 const ALL_WORKSPACES = [
 	...APPS.map((name) => `apps/${name}`),
 	...PACKAGES.map((name) => `packages/${name}`),
 ] as const;
 
-const REQUIRED_ROOT_SCRIPTS = [
-	"test",
-	"typecheck",
-	"lint",
-	"coverage",
-	"build",
-] as const;
+const REQUIRED_ROOT_SCRIPTS = ["test", "typecheck", "lint", "coverage", "build"] as const;
 
 const CRITICAL_COVERAGE_PACKAGES = [
 	"domain",
@@ -60,9 +47,7 @@ describe("workspace bootstrap", () => {
 			? workspaces
 			: ((workspaces as { packages?: string[] }).packages ?? []);
 
-		expect(patterns).toEqual(
-			expect.arrayContaining(["apps/*", "packages/*"]),
-		);
+		expect(patterns).toEqual(expect.arrayContaining(["apps/*", "packages/*"]));
 
 		for (const workspace of ALL_WORKSPACES) {
 			expect(existsSync(packageJsonPath(workspace))).toBe(true);
@@ -94,8 +79,8 @@ describe("workspace bootstrap", () => {
 			expect((scripts?.[script] ?? "").trim().length).toBeGreaterThan(0);
 		}
 
-		// Scripts must fail the root when a package fails (filter/workspace runners)
-		for (const script of ["test", "typecheck", "lint", "build"] as const) {
+		// Workspace-spanning scripts must fail the root when a package fails
+		for (const script of ["test", "typecheck", "build"] as const) {
 			const body = scripts?.[script] ?? "";
 			expect(
 				body.includes("--filter") ||
@@ -106,6 +91,8 @@ describe("workspace bootstrap", () => {
 					body.includes("nx"),
 			).toBe(true);
 		}
+		// Root lint is a single Biome pass over the monorepo
+		expect((scripts?.lint ?? "").toLowerCase()).toMatch(/biome/);
 	});
 
 	test("TypeScript strict mode and consistent module resolution apply to every package", () => {
@@ -113,9 +100,7 @@ describe("workspace bootstrap", () => {
 		expect(existsSync(basePath)).toBe(true);
 
 		const base = readJson(basePath);
-		const compilerOptions = base.compilerOptions as
-			| Record<string, unknown>
-			| undefined;
+		const compilerOptions = base.compilerOptions as Record<string, unknown> | undefined;
 		expect(compilerOptions).toBeDefined();
 		expect(compilerOptions?.strict).toBe(true);
 		expect(compilerOptions?.moduleResolution).toBeDefined();
@@ -130,10 +115,7 @@ describe("workspace bootstrap", () => {
 			expect(typeof extendsField).toBe("string");
 			expect(extendsField as string).toMatch(/tsconfig\.base\.json$/);
 
-			const localOptions = (tsconfig.compilerOptions ?? {}) as Record<
-				string,
-				unknown
-			>;
+			const localOptions = (tsconfig.compilerOptions ?? {}) as Record<string, unknown>;
 			// Packages must not disable strict mode locally
 			if ("strict" in localOptions) {
 				expect(localOptions.strict).toBe(true);
@@ -146,14 +128,15 @@ describe("workspace bootstrap", () => {
 		expect(existsSync(bunfigPath)).toBe(true);
 
 		const bunfig = readFileSync(bunfigPath, "utf8");
-		expect(bunfig).toMatch(/\[test\.coverage\]/i);
-		expect(bunfig.toLowerCase()).toMatch(/threshold/);
+		// Bun coverage lives under [test] with coverageThreshold + ignore patterns
+		expect(bunfig).toMatch(/\[test\]/);
+		expect(bunfig).toMatch(/coverageThreshold/);
 		// Generated migrations/fixtures must not count toward thresholds
-		expect(bunfig.toLowerCase()).toMatch(/skip|exclude|ignore/);
+		expect(bunfig).toMatch(/coveragePathIgnorePatterns/);
+		expect(bunfig.toLowerCase()).toMatch(/migration|fixture/);
 
 		const rootPkg = readJson(join(ROOT, "package.json"));
-		const coverageScript = (rootPkg.scripts as Record<string, string>)
-			.coverage;
+		const coverageScript = (rootPkg.scripts as Record<string, string>).coverage;
 		expect(coverageScript).toMatch(/--coverage|coverage/);
 
 		// Critical packages are present so thresholds can target them later
@@ -209,7 +192,8 @@ describe("workspace bootstrap", () => {
 	test("no empty source stubs masquerade as packages during bootstrap", () => {
 		// Bootstrap may ship entrypoints, but they must be real modules (non-empty files)
 		// and must not contain TODO/FIXME/placeholder markers.
-		const forbidden = /\b(TODO|FIXME|placeholder|not implemented|throw new Error\(["']not implemented)/i;
+		const forbidden =
+			/\b(TODO|FIXME|placeholder|not implemented|throw new Error\(["']not implemented)/i;
 
 		for (const workspace of ALL_WORKSPACES) {
 			const srcDir = join(ROOT, workspace, "src");

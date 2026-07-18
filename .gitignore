@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+.turbo/
+.cache/
+*.tsbuildinfo
+.autopilotagent/
+docs/autopilotagent/**/run.pid
+docs/autopilotagent/**/loop-state.md
+docs/autopilotagent/**/stop-signal
