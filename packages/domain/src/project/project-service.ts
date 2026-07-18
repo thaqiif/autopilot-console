@@ -3,7 +3,7 @@
  */
 
 import type { AutopilotRunner } from "../../../autopilot/src/index";
-import type { Queryable, Sql, TransactionSql } from "../../../database/src/client";
+import type { Queryable, TransactionSql } from "../../../database/src/client";
 import {
 	appendAuditEvent,
 	archiveProject as archiveProjectRow,
@@ -32,11 +32,13 @@ import {
 import { redactSecrets, redactValue } from "../../../shared/src/security/redaction";
 import type { Project, ProjectActor } from "./project";
 import {
+	aggregateValidationOk,
 	PROJECT_VALIDATION_CHECK_CODES,
 	type ProjectValidationCheck,
 	type ProjectValidationCheckCode,
 	type ProjectValidationInput,
 	type ProjectValidationResult,
+	touchesProtectedProjectFields,
 } from "./project-validation";
 
 export type { ProjectValidationResult } from "./project-validation";
@@ -143,10 +145,6 @@ function check(
 	return { code, ok, message: safeMessage(message) };
 }
 
-function emptyChecks(): ProjectValidationCheck[] {
-	return PROJECT_VALIDATION_CHECK_CODES.map((code) => check(code, false, "Not evaluated"));
-}
-
 function preflightHas(result: GitPreflightResult, codes: GitPreflightFailureCode[]): boolean {
 	return result.failures.some((f) => codes.includes(f.code));
 }
@@ -248,10 +246,6 @@ async function runValidation(
 		// REMOTE_IDENTITY may already have been marked for invalid owner/repo
 		const alreadyRemote = checks.some((c) => c.code === "REMOTE_IDENTITY");
 		if (!alreadyRemote) {
-			const remoteOk =
-				!preflightHas(preflight, ["REMOTE_MISSING", "REMOTE_IDENTITY_MISMATCH"]) &&
-				(preflight.ok || !preflightHas(preflight, ["REMOTE_MISSING", "REMOTE_IDENTITY_MISMATCH"]));
-			// Remote ok when no remote-related failures
 			const remoteFail = preflightHas(preflight, ["REMOTE_MISSING", "REMOTE_IDENTITY_MISMATCH"]);
 			checks.push(
 				check(
@@ -265,7 +259,6 @@ async function runValidation(
 					),
 				),
 			);
-			void remoteOk;
 		}
 
 		const branchFail = preflightHas(preflight, ["DEVELOPMENT_BRANCH_MISSING"]);
@@ -358,10 +351,9 @@ async function runValidation(
 		return byCode.get(code) ?? check(code, false, "Not evaluated");
 	});
 
-	const ok = ordered.every((c) => c.ok) && canonicalPath !== null;
 	return {
-		ok,
-		canonicalPath: ok ? canonicalPath : canonicalPath,
+		ok: aggregateValidationOk(ordered, canonicalPath),
+		canonicalPath,
 		checks: ordered,
 	};
 }
@@ -596,7 +588,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
 
 		async updateProject(input) {
 			const existing = await getProjectById(options.sql, input.projectId);
-			if (!existing || existing.status !== "active") {
+			if (existing?.status !== "active") {
 				return {
 					ok: false,
 					reason: existing ? "ALREADY_ARCHIVED" : "NOT_FOUND",
@@ -604,11 +596,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
 				};
 			}
 
-			const protectedTouched =
-				input.workspacePath !== undefined ||
-				input.githubOwner !== undefined ||
-				input.githubRepo !== undefined ||
-				input.developmentBranch !== undefined;
+			const protectedTouched = touchesProtectedProjectFields(input);
 
 			if (protectedTouched) {
 				const active = await countActiveAttemptsForProject(options.sql, existing.id);
@@ -820,7 +808,3 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
 		},
 	};
 }
-
-// silence unused emptyChecks for potential future use
-void emptyChecks;
-void (null as unknown as Sql);

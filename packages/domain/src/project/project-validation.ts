@@ -37,3 +37,41 @@ export interface ProjectValidationInput {
 	workspacePath: string;
 	developmentBranch: string;
 }
+
+/** Fields blocked while project has queued/active jobs. */
+export const PROTECTED_PROJECT_FIELDS = [
+	"workspacePath",
+	"githubOwner",
+	"githubRepo",
+	"developmentBranch",
+] as const;
+
+export type ProtectedProjectField = (typeof PROTECTED_PROJECT_FIELDS)[number];
+
+export interface ProjectFieldChange {
+	workspacePath?: string;
+	githubOwner?: string;
+	githubRepo?: string;
+	developmentBranch?: string;
+	name?: string;
+	slug?: string;
+	description?: string | null;
+}
+
+/** True when any path/repo/branch field is present in the change set. */
+export function touchesProtectedProjectFields(change: ProjectFieldChange): boolean {
+	return (
+		change.workspacePath !== undefined ||
+		change.githubOwner !== undefined ||
+		change.githubRepo !== undefined ||
+		change.developmentBranch !== undefined
+	);
+}
+
+/** Aggregate ok from ordered checks (all must pass and path present). */
+export function aggregateValidationOk(
+	checks: readonly ProjectValidationCheck[],
+	canonicalPath: string | null,
+): boolean {
+	return canonicalPath !== null && checks.every((c) => c.ok);
+}

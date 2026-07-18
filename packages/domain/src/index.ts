@@ -52,11 +52,16 @@ export {
 	type UpdateProjectResult,
 } from "./project/project-service";
 export {
+	aggregateValidationOk,
 	PROJECT_VALIDATION_CHECK_CODES,
+	PROTECTED_PROJECT_FIELDS,
+	type ProjectFieldChange,
 	type ProjectValidationCheck,
 	type ProjectValidationCheckCode,
 	type ProjectValidationInput,
 	type ProjectValidationResult,
+	type ProtectedProjectField,
+	touchesProtectedProjectFields,
 } from "./project/project-validation";
 export {
 	computeDevelopmentProgress,

@@ -470,8 +470,7 @@ describe("project create", () => {
 	});
 
 	test("rolls back project insert when audit write fails", async () => {
-		const service = makeService();
-		// force audit failure by dropping table mid-call via wrapper
+		// force audit failure mid-transaction via sql proxy
 		const brokenSql = new Proxy(sql, {
 			apply(target, thisArg, argArray) {
 				return Reflect.apply(target as unknown as (...a: unknown[]) => unknown, thisArg, argArray);
