@@ -6,8 +6,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
-import { MemoryRouter, RouterProvider, createMemoryRouter } from "react-router-dom";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
 import { AuthProvider } from "../../auth/auth-provider";
 
 let AttentionPage: React.ComponentType;
@@ -32,6 +32,64 @@ try {
 	AttentionCard = (await import("./attention-card")).AttentionCard;
 } catch {
 	AttentionCard = () => <div data-testid="attention-card-missing" />;
+}
+
+// ---------------------------------------------------------------------------
+// Fetch mocking
+// ---------------------------------------------------------------------------
+
+const MOCK_ATTENTION = {
+	items: [
+		{
+			projectId: "proj-1",
+			releaseId: "rel-1",
+			featureId: "feat-1",
+			reason: "Task review required",
+			state: "TASKS_REVIEW",
+			age: "2 hours ago",
+			category: "task_review",
+			primaryAction: "Review tasks",
+		},
+		{
+			projectId: "proj-2",
+			featureId: "feat-2",
+			reason: "Development failed",
+			state: "DEVELOPMENT_FAILED",
+			age: "3 hours ago",
+			category: "development_failed",
+			primaryAction: "View failure",
+		},
+		{
+			projectId: "proj-3",
+			featureId: "feat-3",
+			reason: "PR awaiting review",
+			state: "PR_REVIEW",
+			age: "30 minutes ago",
+			category: "pr_review",
+			primaryAction: "View on GitHub",
+		},
+	],
+};
+
+function installFetchMock() {
+	const original = globalThis.fetch;
+	const mockFetch = (async (input: string | URL | Request, _init?: RequestInit) => {
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+		if (url.includes("/api/attention")) {
+			return new Response(JSON.stringify(MOCK_ATTENTION), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}
+
+		return new Response(null, { status: 404 });
+	}) as typeof fetch;
+	globalThis.fetch = mockFetch;
+
+	return () => {
+		globalThis.fetch = original;
+	};
 }
 
 function renderAttention(path = "/attention") {
@@ -72,17 +130,29 @@ function renderAttention(path = "/attention") {
 // ---------------------------------------------------------------------------
 
 describe("attention page rendering", () => {
-	beforeEach(() => cleanup());
-	afterEach(() => cleanup());
-
-	test("renders the page heading", () => {
-		renderAttention();
-		expect(screen.queryByRole("heading", { name: /attention/i })).toBeTruthy();
+	let restore: () => void;
+	beforeEach(() => {
+		cleanup();
+		restore = installFetchMock();
+	});
+	afterEach(() => {
+		cleanup();
+		restore();
 	});
 
-	test("renders with accessible landmarks", () => {
+	test("renders the page heading", async () => {
 		renderAttention();
-		const main = screen.queryByRole("main") ?? document.querySelector("main, [role=main], section");
+		await waitFor(() => {
+			expect(screen.queryByRole("heading", { name: /attention/i })).toBeTruthy();
+		});
+	});
+
+	test("renders with accessible landmarks", async () => {
+		renderAttention();
+		await waitFor(() => {
+			expect(screen.queryByRole("heading", { name: /attention/i })).toBeTruthy();
+		});
+		const main = document.querySelector("section[aria-label]") ?? document.querySelector("section");
 		expect(main).toBeTruthy();
 	});
 });
@@ -92,13 +162,22 @@ describe("attention page rendering", () => {
 // ---------------------------------------------------------------------------
 
 describe("attention categories", () => {
-	beforeEach(() => cleanup());
-	afterEach(() => cleanup());
+	let restore: () => void;
+	beforeEach(() => {
+		cleanup();
+		restore = installFetchMock();
+	});
+	afterEach(() => {
+		cleanup();
+		restore();
+	});
 
-	test("page loads without crashing", () => {
+	test("page loads without crashing", async () => {
 		renderAttention();
-		// Should render some content, not a blank page
-		expect(document.body.textContent!.length).toBeGreaterThan(0);
+		await waitFor(() => {
+			expect(screen.queryByRole("heading", { name: /attention/i })).toBeTruthy();
+		});
+		expect(document.body.textContent?.length).toBeGreaterThan(0);
 	});
 });
 
@@ -167,11 +246,21 @@ describe("attention card actions", () => {
 // ---------------------------------------------------------------------------
 
 describe("attention page view states", () => {
-	beforeEach(() => cleanup());
-	afterEach(() => cleanup());
+	let restore: () => void;
+	beforeEach(() => {
+		cleanup();
+		restore = installFetchMock();
+	});
+	afterEach(() => {
+		cleanup();
+		restore();
+	});
 
-	test("renders without errors when loaded", () => {
+	test("renders without errors when loaded", async () => {
 		renderAttention();
+		await waitFor(() => {
+			expect(screen.queryByRole("heading", { name: /attention/i })).toBeTruthy();
+		});
 		expect(screen.queryByRole("alert")).toBeNull();
 	});
 });
