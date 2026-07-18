@@ -218,15 +218,15 @@
         "test": {
           "description": "Add an isolated PostgreSQL integration suite that applies the core migration and proves hierarchy, uniqueness, archival, immutable approval/PR identity, and UTC constraints fail before the schema exists.",
           "file": "packages/database/src/schema/core-schema.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement the typed PostgreSQL client, core schema and migration, transaction-aware fixtures, and minimal repositories needed to satisfy the core persistence tests.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Centralize IDs and timestamp mapping, remove repository query duplication, verify indexes support hierarchy lookups, and rerun migration and isolation tests.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -234,7 +234,7 @@
         "Run constraint tests in isolation and as a full suite to detect fixture pollution.",
         "Inspect generated query plans for project/release/feature lookup indexes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "4",
