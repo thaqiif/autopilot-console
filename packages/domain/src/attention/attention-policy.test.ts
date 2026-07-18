@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { FEATURE_STATES, type FeatureState } from "../feature/feature-state";
 import {
-	ATTENTION_ACTIONS,
-	ATTENTION_CATEGORIES,
+	type ATTENTION_ACTIONS,
+	type ATTENTION_CATEGORIES,
 	type AttentionInput,
 	deriveAttention,
 	deriveAttentionForFeatures,
@@ -15,10 +15,7 @@ const BASE = {
 	stateChangedAt: "2026-07-18T00:00:00.000Z",
 } as const;
 
-function input(
-	state: FeatureState,
-	extra: Partial<AttentionInput> = {},
-): AttentionInput {
+function input(state: FeatureState, extra: Partial<AttentionInput> = {}): AttentionInput {
 	return {
 		...BASE,
 		state,
@@ -83,9 +80,7 @@ describe("deriveAttention", () => {
 			expect(item.reason).toBe(row.category);
 			expect(item.ageBasis).toBe(BASE.stateChangedAt);
 			// Exactly one primary action field
-			expect(Object.keys(item).filter((k) => k === "primaryAction")).toHaveLength(
-				1,
-			);
+			expect(Object.keys(item).filter((k) => k === "primaryAction")).toHaveLength(1);
 		}
 	});
 
@@ -96,10 +91,7 @@ describe("deriveAttention", () => {
 	});
 
 	test("matrix covers every FeatureState exactly once across attention and non-attention", () => {
-		const covered = new Set([
-			...ATTENTION_STATES.map((r) => r.state),
-			...NON_ATTENTION_STATES,
-		]);
+		const covered = new Set([...ATTENTION_STATES.map((r) => r.state), ...NON_ATTENTION_STATES]);
 		expect([...covered].sort()).toEqual([...FEATURE_STATES].sort());
 	});
 

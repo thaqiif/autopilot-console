@@ -5,6 +5,25 @@
 export const packageName = "@autopilot-console/domain" as const;
 
 export {
+	ATTENTION_ACTIONS,
+	ATTENTION_CATEGORIES,
+	type AttentionAction,
+	type AttentionCategory,
+	type AttentionInput,
+	type AttentionItem,
+	deriveAttention,
+	deriveAttentionForFeatures,
+} from "./attention/attention-policy";
+export {
+	FAILURE_KINDS,
+	type FailureAttentionCategory,
+	type FailureKind,
+	type FailureProjection,
+	type FailureRecommendedAction,
+	type MapFailureInput,
+	mapFailure,
+} from "./failure/failure-policy";
+export {
 	type AppliedFeatureTransition,
 	applyFeatureTransition,
 	FEATURE_STATES,
@@ -22,3 +41,11 @@ export {
 	type TransitionOwner,
 	type TransitionRejectionReason,
 } from "./feature/feature-state-machine";
+
+export {
+	computeDevelopmentProgress,
+	type DevelopmentProgress,
+	type FeatureForProgress,
+	RELEASE_DEVELOPMENT_STATUSES,
+	type ReleaseDevelopmentStatus,
+} from "./release/development-progress";

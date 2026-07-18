@@ -1,17 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import {
 	FAILURE_KINDS,
+	type FailureAttentionCategory,
 	type FailureKind,
-	mapFailure,
+	type FailureRecommendedAction,
 	type MapFailureInput,
+	mapFailure,
 } from "./failure-policy";
 
 describe("mapFailure", () => {
 	const cases: Array<{
 		kind: FailureKind;
 		summaryIncludes: string;
-		action: string;
-		attentionCategory: string | null;
+		action: FailureRecommendedAction;
+		attentionCategory: FailureAttentionCategory;
 	}> = [
 		{
 			kind: "validation",
@@ -76,7 +78,7 @@ describe("mapFailure", () => {
 	];
 
 	test("maps every failure kind to safe summary and recommended next action", () => {
-		expect(FAILURE_KINDS.length).toBe(cases.length);
+		expect(FAILURE_KINDS.length).toBe(cases.length as typeof FAILURE_KINDS.length);
 		for (const row of cases) {
 			const result = mapFailure({ kind: row.kind });
 			expect(result.kind).toBe(row.kind);

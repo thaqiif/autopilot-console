@@ -75,9 +75,7 @@ describe("computeDevelopmentProgress", () => {
 	});
 
 	test("never labels production-ready or released", () => {
-		const result = computeDevelopmentProgress([
-			feature("DEVELOPMENT_MERGED"),
-		]);
+		const result = computeDevelopmentProgress([feature("DEVELOPMENT_MERGED")]);
 		const serialized = JSON.stringify(result).toLowerCase();
 		expect(serialized).not.toContain("production");
 		expect(serialized).not.toContain("released");
@@ -101,9 +99,7 @@ describe("computeDevelopmentProgress", () => {
 
 	test("every feature state is accepted without throwing", () => {
 		for (const state of FEATURE_STATES) {
-			expect(() =>
-				computeDevelopmentProgress([feature(state)]),
-			).not.toThrow();
+			expect(() => computeDevelopmentProgress([feature(state)])).not.toThrow();
 		}
 	});
 });
