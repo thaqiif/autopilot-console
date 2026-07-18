@@ -99,10 +99,9 @@ export function createPreflightOrchestrator(
 			project.canonicalPath,
 			approval.relativeTaskPath,
 		);
-		if (!task.ok || task.checksum !== approval.checksum) {
-			validationFailure(
-				task.ok ? "Task checksum differs from the approved snapshot." : task.message,
-			);
+		if (!task.ok) validationFailure(task.message);
+		if (task.checksum !== approval.checksum) {
+			validationFailure("Task checksum differs from the approved snapshot.");
 		}
 
 		const git = await options.git.preflight({

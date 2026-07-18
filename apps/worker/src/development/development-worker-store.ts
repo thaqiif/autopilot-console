@@ -221,12 +221,14 @@ export function createPostgresDevelopmentWorkerStore(sql: Queryable): Developmen
 			});
 		},
 		async heartbeat(attemptId, input) {
-			await heartbeatWorker(sql, input.workerRegistrationId, { activeJobs: 1 });
-			await renewLease(sql, {
-				attemptId,
-				workerRegistrationId: input.workerRegistrationId,
-				leaseExpiresAt: input.leaseExpiresAt,
-			});
+			await Promise.all([
+				heartbeatWorker(sql, input.workerRegistrationId, { activeJobs: 1 }),
+				renewLease(sql, {
+					attemptId,
+					workerRegistrationId: input.workerRegistrationId,
+					leaseExpiresAt: input.leaseExpiresAt,
+				}),
+			]);
 		},
 		async persistSuccess(attemptId, input) {
 			await inTransaction(sql, async (tx) => {
@@ -281,10 +283,16 @@ export function createPostgresDevelopmentWorkerStore(sql: Queryable): Developmen
 		},
 		async persistFailure(input) {
 			const projection = mapFailure({ kind: input.failureKind, detail: input.detail });
+			const isBlocked = input.targetState === "BLOCKED";
 			await inTransaction(sql, async (tx) => {
 				const attempt = await lockAttempt(tx, input.attemptId);
 				assertOwnership(attempt, input.workerRegistrationId);
 				const feature = await lockFeature(tx, attempt.featureId);
+				const ctx = {
+					projectId: attempt.projectId,
+					featureId: attempt.featureId,
+					attemptId: attempt.id,
+				};
 				await persistFeatureTransition(tx, {
 					feature,
 					to: input.targetState,
@@ -300,31 +308,25 @@ export function createPostgresDevelopmentWorkerStore(sql: Queryable): Developmen
 					structuredResult: input.structuredResult ?? { outcome: "failed", failure: projection },
 				});
 				await appendFailureRecord(tx, {
-					projectId: attempt.projectId,
-					featureId: attempt.featureId,
-					attemptId: attempt.id,
+					...ctx,
 					category: projection.kind,
 					summary: projection.summary,
 					recommendedAction: projection.recommendedAction,
 					details: projection.detail ? { detail: projection.detail } : {},
 				});
 				await appendActivityEvent(tx, {
-					projectId: attempt.projectId,
-					featureId: attempt.featureId,
-					attemptId: attempt.id,
-					type: input.targetState === "BLOCKED" ? "development.blocked" : "development.failed",
+					...ctx,
+					type: isBlocked ? "development.blocked" : "development.failed",
 					summary: projection.summary,
 					source: "worker",
 				});
 				await appendAuditEvent(tx, {
+					...ctx,
 					actorType: "worker",
 					actorId: input.workerId,
-					action: input.targetState === "BLOCKED" ? "development.block" : "development.fail",
+					action: isBlocked ? "development.block" : "development.fail",
 					targetType: "development_attempt",
 					targetId: attempt.id,
-					projectId: attempt.projectId,
-					featureId: attempt.featureId,
-					attemptId: attempt.id,
 					result: "failure",
 					priorValues: { featureState: feature.state, attemptStatus: attempt.status },
 					nextValues: { featureState: input.targetState, attemptStatus: "FAILED" },
