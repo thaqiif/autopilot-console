@@ -409,15 +409,15 @@
         "test": {
           "description": "Write release-progress, complete state-by-state attention, stale-sync, and failure-mapping tests first, including empty/archived features and redacted actions; verify missing policies fail.",
           "file": "packages/domain/src/attention/attention-policy.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement pure development-progress, attention-derivation, and failure-policy functions with stable reason and action codes.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Share exhaustive lifecycle classification data with the state machine where safe, remove duplicated labels, and rerun all domain tests and coverage.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -425,7 +425,7 @@
         "Run release progress tests for empty, archived, mixed, and fully merged releases.",
         "Verify UI-facing wording consistently says development progress and Development Merged."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "7",
@@ -474,15 +474,15 @@
         "test": {
           "description": "Write temporary-directory and property-based tests for canonical roots, prefix collisions, traversal, symlink escape, task extension/existence, remote normalization, and Git branch sanitization before implementing the value objects.",
           "file": "packages/shared/src/fs/workspace-path.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement the workspace/task path resolvers and repository/branch value objects using realpath and Git-ref-safe normalization with typed failures.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Centralize containment and normalization checks, remove stringly typed path/ref handling, and rerun tests on Unix path edge cases and randomized slugs.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -490,7 +490,7 @@
         "Run git check-ref-format against generated branches.",
         "Confirm normalized failures contain no credential-bearing remote URL."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "8",

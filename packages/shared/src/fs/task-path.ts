@@ -59,19 +59,15 @@ export async function resolveTaskPath(
 		pathError("Task path contains invalid characters");
 	}
 
-	// Normalize separators; reject any remaining traversal.
+	// Normalize separators; reject parent-directory segments after normalize.
 	const posixStyle = raw.replace(/\\/g, "/");
 	const normalized = posix.normalize(posixStyle).replace(/^\.\//, "");
-	if (
-		normalized === ".." ||
-		normalized.startsWith("../") ||
-		normalized.includes("/../") ||
-		normalized.includes("..")
-	) {
-		pathError("Task path must not contain parent-directory traversal");
-	}
 	if (normalized.length === 0 || normalized === ".") {
 		pathError("Task path must be non-empty");
+	}
+	const segments = normalized.split("/");
+	if (segments.some((segment) => segment === ".." || segment === "")) {
+		pathError("Task path must not contain parent-directory traversal");
 	}
 	if (!hasJsonExtension(normalized)) {
 		pathError("Task path must end with a .json extension");
