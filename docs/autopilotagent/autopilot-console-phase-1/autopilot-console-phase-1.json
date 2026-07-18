@@ -685,15 +685,15 @@
         "test": {
           "description": "Create temporary-repository integration tests for remote/base fetch, first branch creation, retry reuse, task-only dirtiness, unrelated dirtiness, repository/remote/base mismatch, branch compatibility, commit observation, safe push idempotency, and forbidden destructive operations; verify failures first.",
           "file": "packages/git/src/git-safety.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement the narrow GitGateway, CLI command runner with fixed subcommands/argv, preflight policy, deterministic branch workflow, commit observer, and safe idempotent push.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Centralize repository assertions before all effects, remove any generic command escape hatch, normalize redacted errors, and rerun temp-repository tests under retry scenarios.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -701,7 +701,7 @@
         "Search the public adapter API for destructive Git verbs or arbitrary command parameters.",
         "Verify repeat preflight and push operations preserve branch and history."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "11",
