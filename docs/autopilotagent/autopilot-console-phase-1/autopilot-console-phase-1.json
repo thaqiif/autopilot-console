@@ -544,15 +544,15 @@
         "test": {
           "description": "Create task artifact tests from the installed schema and fixtures, adding cases for duplicate/missing/cyclic dependencies, unknown-field preservation, exact checksums, no-rewrite display, atomic replacement, partial JSON, fresh/resumable semantics, and all-pass evaluation; verify they fail first.",
           "file": "packages/autopilot/src/task/task-artifact.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement versioned schemas, semantic graph validation, read-only parsing, immutable snapshot/checksum creation, normalized summaries, and bounded tolerant reads.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Separate wire-schema preservation from normalized views, reuse one dependency graph traversal, and rerun compatibility fixtures plus randomized atomic-read tests.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -560,7 +560,7 @@
         "Compare task file hashes before and after validation/display operations.",
         "Simulate concurrent atomic replacement and partial writes with a fake clock and bounded retries."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "9",
@@ -618,15 +618,15 @@
         "test": {
           "description": "Build a controllable fake executable and failing adapter integration tests for argv/cwd/env/shell, PID start identity, liveness, task/notes/analytics results, exit mapping, redaction, and deterministic-branch compatibility; add an opt-in contract test against the installed CLI.",
           "file": "packages/autopilot/src/runner/cli-autopilot-runner.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement the AutopilotRunner interface, direct CLI adapter, process identity checks, normalized results, and the tested non-destructive compatibility strategy documented in docs/architecture/autopilot-cli-compatibility.md.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Isolate OS process inspection behind injectable ports, minimize the child environment, centralize redaction/result mapping, and rerun fake plus opt-in contract suites.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -634,7 +634,7 @@
         "Run the installed-CLI contract suite explicitly in a disposable fixture repository.",
         "Inspect spawned process arguments and environment and confirm no shell or arbitrary command template is accepted."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "10",

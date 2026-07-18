@@ -1,8 +1,8 @@
 # autopilot-console-phase-1 Progress Notes
 
 ## Current State
-- Last completed: requirement 8
-- Working on: requirement 9
+- Last completed: requirement 9
+- Working on: none (batch 1 complete)
 - Blockers: none
 
 ## Files Modified
@@ -41,8 +41,26 @@
 - Completed: 2026-07-18 (prior session)
 - Commits: 3457329, 7a8a5e7, e3280cf
 
+### Requirement 9: AutopilotRunner CLI adapter
+- Started: 2026-07-18T01:14:45Z
+- Completed: 2026-07-18
+- Commits:
+  - d5ce2ed test(autopilot): add failing AutopilotRunner CLI adapter suites
+  - 3086626 feat(autopilot): implement AutopilotRunner CLI adapter and branch compatibility
+  - 6bd4c6d refactor(autopilot): dedupe runtime validation and diagnostic capture
+- Files Changed:
+  - packages/autopilot/src/runner/* — AutopilotRunner port, CLI adapter, identity, normalizer, branch compatibility
+  - packages/autopilot/src/testing/fake-autopilotagent.ts — controllable fake executable
+  - docs/architecture/autopilot-cli-compatibility.md — non-destructive basename strategy
+- Learnings:
+  - Truncate diagnostics before redaction; large buffers + global regex can hang tests.
+  - SIGUSR1 may yield exitCode null; map graceful signal to 0 when appropriate.
+  - Branch strategy string must not match /force|delete|rewrite/ when asserting absence of destructive ops in strategy field.
+
 ## Session Log
 - [2026-07-18T01:01:53Z] Started requirement 7
 - [2026-07-18] Completed requirement 7 (batch 1)
 
 - [2026-07-18T01:14:45Z] Started requirement 9: AutopilotRunner CLI adapter
+
+- [2026-07-18] Completed requirement 9 (batch 1)
