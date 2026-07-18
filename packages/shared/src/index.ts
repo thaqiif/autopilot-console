@@ -54,6 +54,27 @@ export {
 	type NormalizedErrorJSON,
 } from "./errors/normalized-error";
 export {
+	type ResolvedTaskPath,
+	resolveTaskPath,
+	type TaskRelativePath,
+} from "./fs/task-path";
+export {
+	type CanonicalizeOptions,
+	type CanonicalWorkspacePath,
+	canonicalizeWorkspacePath,
+	isPathInsideRoot,
+} from "./fs/workspace-path";
+export {
+	type FeatureBranchName,
+	generateFeatureBranch,
+	sanitizeSlug,
+} from "./git/feature-branch";
+export {
+	normalizeRepositoryIdentity,
+	parseGitHubRemote,
+	type RepositoryIdentity,
+} from "./git/repository-identity";
+export {
 	createOperationKey,
 	type OperationKeyParts,
 	type OperationName,
@@ -67,5 +88,4 @@ export {
 	childCorrelation,
 	createCorrelationId,
 } from "./observability/correlation";
-
 export { redactSecrets, redactValue } from "./security/redaction";

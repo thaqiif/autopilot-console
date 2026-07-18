@@ -3,11 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { errorCodes } from "../errors/normalized-error";
-import {
-	type ResolvedTaskPath,
-	resolveTaskPath,
-	type TaskRelativePath,
-} from "./task-path";
+import { type ResolvedTaskPath, resolveTaskPath, type TaskRelativePath } from "./task-path";
 
 const tempRoots: string[] = [];
 
@@ -33,10 +29,10 @@ describe("resolveTaskPath", () => {
 		await writeFile(absolute, '{"requirements":[]}');
 
 		const result = await resolveTaskPath(project, relative);
-		expect(result.relative).toBe(relative);
+		expect(String(result.relative)).toBe(relative);
 		expect(result.absolute).toBe(await realpath(absolute));
 		const branded: ResolvedTaskPath = result;
-		expect(branded.relative).toBe(relative);
+		expect(String(branded.relative)).toBe(relative);
 	});
 
 	test("rejects absolute task paths", async () => {
@@ -135,7 +131,7 @@ describe("resolveTaskPath", () => {
 		await mkdir(join(project, "docs"), { recursive: true });
 		await writeFile(join(project, "docs", "task.json"), "{}");
 		const result = await resolveTaskPath(project, "./docs/task.json");
-		expect(result.relative).toBe("docs/task.json");
+		expect(String(result.relative)).toBe("docs/task.json");
 
 		// Windows-style absolute should still be rejected on Unix as absolute-ish or invalid.
 		await expect(resolveTaskPath(project, "C:\\Windows\\task.json")).rejects.toMatchObject({
@@ -153,7 +149,7 @@ describe("resolveTaskPath", () => {
 			await mkdir(join(project, `n${i}`, "deep"), { recursive: true });
 			await writeFile(abs, "{}");
 			const ok = await resolveTaskPath(project, rel);
-			expect(ok.absolute.startsWith(projectReal + "/")).toBe(true);
+			expect(ok.absolute.startsWith(`${projectReal}/`)).toBe(true);
 			expect(ok.relative.includes("..")).toBe(false);
 
 			await expect(resolveTaskPath(project, `../out-${i}.json`)).rejects.toMatchObject({

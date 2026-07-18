@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { createNormalizedError, errorCodes } from "../errors/normalized-error";
 import {
 	type CanonicalWorkspacePath,
@@ -32,10 +32,9 @@ describe("canonicalizeWorkspacePath", () => {
 		const roots = [await realpath(root)];
 
 		const result = await canonicalizeWorkspacePath(project, roots);
-		expect(result).toBe(await realpath(project));
-		// branded-ish string
+		expect(String(result)).toBe(await realpath(project));
 		const branded: CanonicalWorkspacePath = result;
-		expect(String(branded)).toBe(result);
+		expect(String(branded)).toBe(String(result));
 	});
 
 	test("rejects a path that does not exist", async () => {
@@ -72,9 +71,11 @@ describe("canonicalizeWorkspacePath", () => {
 
 	test("accepts path equal to root only when allowRootEquality is true", async () => {
 		const root = await makeTempDir("ws-root-");
-		const roots = [await realpath(root)];
-		const result = await canonicalizeWorkspacePath(root, roots, { allowRootEquality: true });
-		expect(result).toBe(roots[0]);
+		const rootReal = await realpath(root);
+		const result = await canonicalizeWorkspacePath(root, [rootReal], {
+			allowRootEquality: true,
+		});
+		expect(String(result)).toBe(rootReal);
 	});
 
 	test("rejects prefix-collision tricks (similarly-prefixed sibling directory)", async () => {
@@ -120,7 +121,7 @@ describe("canonicalizeWorkspacePath", () => {
 		const roots = [await realpath(root)];
 
 		const result = await canonicalizeWorkspacePath(link, roots);
-		expect(result).toBe(await realpath(project));
+		expect(String(result)).toBe(await realpath(project));
 	});
 
 	test("normalized errors never embed secrets from the candidate path URL form", async () => {
@@ -145,15 +146,16 @@ describe("canonicalizeWorkspacePath", () => {
 		const nested = join(root, "a", "b", "c");
 		await mkdir(nested, { recursive: true });
 		const outsideBase = await makeTempDir("ws-out-");
-		const roots = [await realpath(root)];
+		const rootReal = await realpath(root);
+		const roots = [rootReal];
 
 		for (let i = 0; i < 20; i++) {
 			const segments = Array.from({ length: 1 + (i % 3) }, (_, j) => `seg${i}_${j}`);
 			const inside = join(root, ...segments);
 			await mkdir(inside, { recursive: true });
 			const accepted = await canonicalizeWorkspacePath(inside, roots);
-			expect(accepted.startsWith(roots[0]! + "/") || accepted === roots[0]).toBe(true);
-			expect(isPathInsideRoot(accepted, roots[0]!)).toBe(true);
+			expect(accepted.startsWith(`${rootReal}/`) || accepted === rootReal).toBe(true);
+			expect(isPathInsideRoot(accepted, rootReal)).toBe(true);
 
 			const outside = join(outsideBase, `out-${i}`);
 			await mkdir(outside, { recursive: true });

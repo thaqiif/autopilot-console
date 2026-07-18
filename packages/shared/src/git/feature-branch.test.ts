@@ -1,14 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { errorCodes } from "../errors/normalized-error";
+import { type FeatureBranchName, generateFeatureBranch, sanitizeSlug } from "./feature-branch";
 import {
-	type FeatureBranchName,
-	generateFeatureBranch,
-	sanitizeSlug,
-} from "./feature-branch";
-import {
-	type RepositoryIdentity,
 	normalizeRepositoryIdentity,
 	parseGitHubRemote,
+	type RepositoryIdentity,
 } from "./repository-identity";
 
 describe("normalizeRepositoryIdentity / parseGitHubRemote", () => {
@@ -31,9 +27,9 @@ describe("normalizeRepositoryIdentity / parseGitHubRemote", () => {
 		expect(() => normalizeRepositoryIdentity({ owner: "org/extra", repository: "repo" })).toThrow(
 			/owner|repository|invalid/i,
 		);
-		expect(() =>
-			normalizeRepositoryIdentity({ owner: "org", repository: "repo/extra" }),
-		).toThrow(/owner|repository|invalid/i);
+		expect(() => normalizeRepositoryIdentity({ owner: "org", repository: "repo/extra" })).toThrow(
+			/owner|repository|invalid/i,
+		);
 	});
 
 	test("parses https remote without exposing embedded credentials", () => {
@@ -97,32 +93,32 @@ describe("generateFeatureBranch", () => {
 			featureId: "feat_01HXYZABC",
 			slug: "User Auth",
 		});
-		expect(branch).toBe("feature/feat_01HXYZABC-user-auth");
+		expect(String(branch)).toBe("feature/feat_01HXYZABC-user-auth");
 		const branded: FeatureBranchName = branch;
-		expect(String(branded)).toBe(branch);
+		expect(String(branded)).toBe(String(branch));
 	});
 
 	test("is stable across retries with the same inputs", () => {
 		const a = generateFeatureBranch({ featureId: "feat_1", slug: "login-form" });
 		const b = generateFeatureBranch({ featureId: "feat_1", slug: "login-form" });
 		expect(a).toBe(b);
-		expect(a).toBe("feature/feat_1-login-form");
+		expect(String(a)).toBe("feature/feat_1-login-form");
 	});
 
 	test("distinct feature IDs remain distinct when titles sanitize to the same slug", () => {
 		const a = generateFeatureBranch({ featureId: "feat_aaa", slug: "Hello World" });
 		const b = generateFeatureBranch({ featureId: "feat_bbb", slug: "hello-world" });
 		expect(a).not.toBe(b);
-		expect(a).toBe("feature/feat_aaa-hello-world");
-		expect(b).toBe("feature/feat_bbb-hello-world");
+		expect(String(a)).toBe("feature/feat_aaa-hello-world");
+		expect(String(b)).toBe("feature/feat_bbb-hello-world");
 	});
 
 	test("rejects empty or unsafe feature id / slug output", () => {
 		expect(() => generateFeatureBranch({ featureId: "", slug: "x" })).toThrow(/feature|id/i);
 		expect(() => generateFeatureBranch({ featureId: "feat_1", slug: "!!!" })).toThrow(/slug/i);
-		expect(() =>
-			generateFeatureBranch({ featureId: "feat/../evil", slug: "ok" }),
-		).toThrow(/feature|id|invalid|ref/i);
+		expect(() => generateFeatureBranch({ featureId: "feat/../evil", slug: "ok" })).toThrow(
+			/feature|id|invalid|ref/i,
+		);
 	});
 
 	test("output is a valid Git ref component shape (no spaces, dots at ends, double dots)", () => {
@@ -142,7 +138,7 @@ describe("generateFeatureBranch", () => {
 			expect(branch).not.toMatch(/^\./);
 			expect(branch).not.toMatch(/\/\./);
 			// no control or shell-ish characters
-			expect(branch).not.toMatch(/[~^:?*\[\\]/);
+			expect(branch).not.toMatch(/[~^:?*[\\]/);
 		}
 	});
 
@@ -150,13 +146,15 @@ describe("generateFeatureBranch", () => {
 		const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_.";
 		for (let i = 0; i < 40; i++) {
 			const idLen = 3 + (i % 12);
-			const featureId = `f${i}_` + Array.from({ length: idLen }, (_, j) =>
-				"abc123"[(i + j) % 6],
-			).join("");
+			const featureId = `f${i}_${Array.from(
+				{ length: idLen },
+				(_, j) => "abc123"[(i + j) % 6],
+			).join("")}`;
 			const titleLen = 1 + (i % 20);
-			const slug = Array.from({ length: titleLen }, (_, j) => alphabet[(i * 7 + j) % alphabet.length]).join(
-				"",
-			);
+			const slug = Array.from(
+				{ length: titleLen },
+				(_, j) => alphabet[(i * 7 + j) % alphabet.length],
+			).join("");
 			// skip pure-punctuation titles that sanitize empty — those must throw
 			const hasAlnum = /[A-Za-z0-9]/.test(slug);
 			if (!hasAlnum) {
