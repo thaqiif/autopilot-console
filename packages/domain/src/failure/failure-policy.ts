@@ -3,6 +3,8 @@
  * Domain stays free of shared package imports — local redaction only.
  */
 
+import type { AttentionAction, AttentionCategory } from "../attention/attention-policy";
+
 export const FAILURE_KINDS = [
 	"validation",
 	"queue",
@@ -18,26 +20,10 @@ export const FAILURE_KINDS = [
 
 export type FailureKind = (typeof FAILURE_KINDS)[number];
 
-export type FailureAttentionCategory =
-	| "task_review"
-	| "development_failed"
-	| "development_interrupted"
-	| "pr_creation_failed"
-	| "ci_failed"
-	| "pr_review"
-	| "pr_changes_requested"
-	| "blocked"
-	| "stale_github_sync"
-	| null;
+/** Attention category for the failure, or null when no attention item is required. */
+export type FailureAttentionCategory = AttentionCategory | null;
 
-export type FailureRecommendedAction =
-	| "fix_input"
-	| "retry_development"
-	| "retry_pr_creation"
-	| "open_github_checks"
-	| "open_github_pr"
-	| "resolve_block"
-	| "refresh_github_status";
+export type FailureRecommendedAction = AttentionAction | "fix_input";
 
 export interface MapFailureInput {
 	kind: FailureKind;
@@ -165,7 +151,6 @@ export function mapFailure(input: MapFailureInput): FailureProjection {
 	};
 	if (input.detail !== undefined) {
 		result.detail = redact(input.detail);
-		// Also ensure summary never receives raw detail concatenation.
 	}
 	return result;
 }
