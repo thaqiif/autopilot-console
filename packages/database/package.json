@@ -11,5 +11,8 @@
 		"test": "bun test",
 		"lint": "biome check .",
 		"build": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"postgres": "^3.4.9"
 	}
 }
