@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+	applyFeatureTransition,
 	FEATURE_STATES,
 	type FeatureState,
-	type TransitionOwner,
-	applyFeatureTransition,
 	isTerminalFeatureState,
 	listAllowedTransitions,
+	type TransitionOwner,
 } from "./feature-state-machine";
 import type { FeatureTransitionCommand } from "./feature-transition";
 
@@ -472,9 +472,7 @@ describe("feature state machine — F-5 exhaustive matrix", () => {
 
 		for (const pr of PR_STATES) {
 			const edges = listAllowedTransitions(pr);
-			expect(edges.some((e) => e.to === "DEVELOPMENT_MERGED" && e.owner === "poller")).toBe(
-				true,
-			);
+			expect(edges.some((e) => e.to === "DEVELOPMENT_MERGED" && e.owner === "poller")).toBe(true);
 		}
 	});
 
