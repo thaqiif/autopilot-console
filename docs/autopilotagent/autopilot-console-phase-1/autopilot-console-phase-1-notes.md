@@ -2,20 +2,11 @@
 
 ## Current State
 - Last completed: requirement 12
-- Working on: none (batch 1 complete)
+- Working on: requirement 13
 - Blockers: none
 
 ## Files Modified
-- apps/api/src/auth/admin-bootstrap.ts
-- apps/api/src/auth/password.ts
-- apps/api/src/auth/session-service.ts
-- apps/api/src/auth/session-cookie.ts
-- apps/api/src/auth/csrf.ts
-- apps/api/src/auth/login-rate-limit.ts
-- apps/api/src/auth/auth.integration.test.ts
-- apps/api/src/index.ts
-- packages/database/src/repositories/core-repositories.ts
-- packages/database/src/index.ts
+(in progress — requirement 13)
 
 ## Progress
 
@@ -37,6 +28,11 @@
   - Session raw token only returned at login; DB stores SHA-256 hex of token.
   - Login failures share one message; rate limit is keyed by clientKey + fake clock.
 
+### Requirement 13: Project registration, validation, archive, audit
+- Started: 2026-07-18
+- Status: in_progress (RED)
+
 ## Session Log
 - [2026-07-18T01:47:49Z] Started requirement 12
 - [2026-07-18] Completed requirement 12 (batch 1)
+- [2026-07-18] Started requirement 13

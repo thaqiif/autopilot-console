@@ -596,6 +596,31 @@ export async function appendActivityEvent(
 	return mapActivity(rows[0] as Record<string, unknown>);
 }
 
+export async function countActiveAttemptsForProject(
+	sql: Queryable,
+	projectId: string,
+): Promise<number> {
+	const rows = await sql`
+		SELECT count(*)::int AS n
+		FROM development_job_attempts
+		WHERE project_id = ${projectId}
+			AND status IN ('QUEUED', 'RUNNING', 'CANCEL_REQUESTED')
+	`;
+	return (rows[0]?.n as number) ?? 0;
+}
+
+export async function listAuditEventsForTarget(
+	sql: Queryable,
+	input: { targetType: string; targetId: string },
+): Promise<AuditEventRow[]> {
+	const rows = await sql`
+		SELECT * FROM audit_events
+		WHERE target_type = ${input.targetType} AND target_id = ${input.targetId}
+		ORDER BY occurred_at ASC, created_at ASC
+	`;
+	return rows.map((row) => mapAudit(row as Record<string, unknown>));
+}
+
 export async function appendAuditEvent(
 	sql: Queryable,
 	input: {

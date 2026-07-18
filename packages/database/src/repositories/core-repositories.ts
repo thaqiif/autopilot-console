@@ -361,12 +361,15 @@ export async function createProject(
 		canonicalPath: string;
 		developmentBranch: string;
 		description?: string;
+		validationStatus?: string | null;
+		lastValidatedAt?: Date | null;
+		status?: ProjectStatus;
 	},
 ): Promise<ProjectRow> {
 	const rows = await sql`
 		INSERT INTO projects (
 			workspace_id, name, slug, description, github_owner, github_repo,
-			canonical_path, development_branch
+			canonical_path, development_branch, validation_status, last_validated_at, status
 		)
 		VALUES (
 			${input.workspaceId},
@@ -376,10 +379,130 @@ export async function createProject(
 			${input.githubOwner},
 			${input.githubRepo},
 			${input.canonicalPath},
-			${input.developmentBranch}
+			${input.developmentBranch},
+			${input.validationStatus ?? null},
+			${input.lastValidatedAt ?? null},
+			${input.status ?? "active"}
 		)
 		RETURNING *
 	`;
+	return mapProject(rows[0] as Record<string, unknown>);
+}
+
+export async function getProjectById(
+	sql: Queryable,
+	id: string,
+): Promise<ProjectRow | null> {
+	const rows = await sql`SELECT * FROM projects WHERE id = ${id} LIMIT 1`;
+	return rows[0] ? mapProject(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function findActiveProjectByCanonicalPath(
+	sql: Queryable,
+	canonicalPath: string,
+): Promise<ProjectRow | null> {
+	const rows = await sql`
+		SELECT * FROM projects
+		WHERE canonical_path = ${canonicalPath} AND status = 'active'
+		LIMIT 1
+	`;
+	return rows[0] ? mapProject(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function findActiveProjectBySlug(
+	sql: Queryable,
+	slug: string,
+): Promise<ProjectRow | null> {
+	const rows = await sql`
+		SELECT * FROM projects WHERE slug = ${slug} AND status = 'active' LIMIT 1
+	`;
+	return rows[0] ? mapProject(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function findActiveProjectByName(
+	sql: Queryable,
+	name: string,
+): Promise<ProjectRow | null> {
+	const rows = await sql`
+		SELECT * FROM projects WHERE name = ${name} AND status = 'active' LIMIT 1
+	`;
+	return rows[0] ? mapProject(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function findActiveProjectByGithub(
+	sql: Queryable,
+	input: { githubOwner: string; githubRepo: string },
+): Promise<ProjectRow | null> {
+	const rows = await sql`
+		SELECT * FROM projects
+		WHERE github_owner = ${input.githubOwner}
+			AND github_repo = ${input.githubRepo}
+			AND status = 'active'
+		LIMIT 1
+	`;
+	return rows[0] ? mapProject(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function updateProject(
+	sql: Queryable,
+	input: {
+		id: string;
+		name?: string;
+		slug?: string;
+		description?: string | null;
+		githubOwner?: string;
+		githubRepo?: string;
+		canonicalPath?: string;
+		developmentBranch?: string;
+		validationStatus?: string | null;
+		lastValidatedAt?: Date | null;
+	},
+): Promise<ProjectRow> {
+	const current = await getProjectById(sql, input.id);
+	if (!current) throw new Error(`project ${input.id} not found`);
+	const rows = await sql`
+		UPDATE projects SET
+			name = ${input.name ?? current.name},
+			slug = ${input.slug ?? current.slug},
+			description = ${
+				input.description !== undefined ? input.description : current.description
+			},
+			github_owner = ${input.githubOwner ?? current.githubOwner},
+			github_repo = ${input.githubRepo ?? current.githubRepo},
+			canonical_path = ${input.canonicalPath ?? current.canonicalPath},
+			development_branch = ${input.developmentBranch ?? current.developmentBranch},
+			validation_status = ${
+				input.validationStatus !== undefined
+					? input.validationStatus
+					: current.validationStatus
+			},
+			last_validated_at = ${
+				input.lastValidatedAt !== undefined
+					? input.lastValidatedAt
+					: current.lastValidatedAt
+			},
+			updated_at = now()
+		WHERE id = ${input.id}
+		RETURNING *
+	`;
+	if (!rows[0]) throw new Error(`project ${input.id} not found`);
+	return mapProject(rows[0] as Record<string, unknown>);
+}
+
+export async function archiveProject(
+	sql: Queryable,
+	input: { id: string; archivedAt?: Date },
+): Promise<ProjectRow> {
+	const archivedAt = input.archivedAt ?? new Date();
+	const rows = await sql`
+		UPDATE projects SET
+			status = 'archived',
+			archived_at = ${archivedAt},
+			updated_at = now()
+		WHERE id = ${input.id} AND status = 'active'
+		RETURNING *
+	`;
+	if (!rows[0]) throw new Error(`active project ${input.id} not found`);
 	return mapProject(rows[0] as Record<string, unknown>);
 }
 

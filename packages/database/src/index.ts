@@ -12,6 +12,7 @@ export {
 } from "./client";
 export {
 	type AdminAccountRow,
+	archiveProject,
 	countAdminAccounts,
 	createAdminAccount,
 	createFeature,
@@ -22,8 +23,13 @@ export {
 	createTaskApproval,
 	createWorkspace,
 	type FeatureRow,
+	findActiveProjectByCanonicalPath,
+	findActiveProjectByGithub,
+	findActiveProjectByName,
+	findActiveProjectBySlug,
 	getAdminAccountById,
 	getAdminAccountByUsername,
+	getProjectById,
 	getSessionById,
 	getSessionByTokenHash,
 	getWorkspace,
@@ -35,6 +41,7 @@ export {
 	type SessionRow,
 	type TaskApprovalRow,
 	updateAdminPasswordHash,
+	updateProject,
 	type WorkspaceRow,
 } from "./repositories/core-repositories";
 export {
@@ -47,6 +54,7 @@ export {
 	appendProgressSnapshot,
 	claimOutboxIntent,
 	claimScheduledReconciliation,
+	countActiveAttemptsForProject,
 	createDevelopmentAttempt,
 	createIdempotencyRecord,
 	createOutboxIntent,
@@ -58,6 +66,7 @@ export {
 	getDevelopmentAttempt,
 	heartbeatWorker,
 	type IdempotencyRecordRow,
+	listAuditEventsForTarget,
 	type OutboxIntentRow,
 	type ProgressSnapshotRow,
 	renewLease,
