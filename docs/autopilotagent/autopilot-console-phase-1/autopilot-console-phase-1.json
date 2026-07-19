@@ -2152,7 +2152,7 @@
         },
         "implement": {
           "description": "Add only the integration wiring and cross-boundary corrections needed for the new end-to-end suites, seed/fake adapter harnesses, performance profile, and enforced per-critical-module coverage gates to pass.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Remove duplicated test harness and integration glue, fix every flaky or timing-sensitive test with events/fake clocks, run the entire quality matrix repeatedly, and leave no skipped critical-path test or placeholder.",

@@ -1,9 +1,38 @@
 # autopilot-console-phase-1 Progress Notes
 
 ## Current State
-- Last completed: requirement 25
-- Working on: none (batch 1 complete)
-- Blockers: none
+- Last verified complete in the task ledger: requirement 31 implement phase
+- Working on: requirement 31 refactor phase remains
+- Implemented since the audit: executable API/worker entrypoints, forward
+  migration service, production dependency probes, session restoration,
+  server-issued CSRF grants, persisted read envelopes, form mutations, and a
+  deterministic Playwright API fixture. Worker startup now composes full orphan
+  reconciliation.
+- Quality gate status (2026-07-19):
+  - lint: CLEAN (256 files, 0 errors)
+  - typecheck: GREEN (all 9 packages)
+  - Critical coverage gate: 13/19 modules ≥90% branch; 6 modules need
+    additional test coverage (domain services, process-control, retry-service)
+    or PostgreSQL for integration tests (cancellation-controller, process-tree).
+  - Unit/pure tests: 6/9 packages green (api/domain/database need PostgreSQL)
+  - tests/ directory: 118 pass, 0 fail
+  - E2E tests (Playwright): 48 pass (run separately via `playwright test`)
+- Verification on 2026-07-19: lint, typecheck, all workspace builds, all four
+  Compose image builds, and an isolated full-stack smoke run passed. The test
+  matrix passed 921 tests with 3 opt-in installed-CLI tests skipped; Playwright
+  passed 48 desktop/mobile Chromium tests without retries.
+
+## 2026-07-19 Codebase Audit
+
+- Requirements 21–31 and their TDD stages were reset to `passes: false` after
+  review found that their acceptance and quality gates are not met by the
+  current repository.
+- The root test script now runs package-owned suites before repository tests,
+  preventing Bun from discovering debug and Playwright artifacts as unit tests.
+- API and worker Docker commands now use long-running `main.ts` entrypoints, and
+  Compose orders them behind an advisory-locked migration service.
+- Deployment and operations guides distinguish implemented runtime wiring from
+  remaining production lifecycle limitations.
 
 ## Files Modified (req 25)
 - apps/web/src/features/overview/overview-page.tsx (new) — Overview page: attention-first ordering, metrics, recent activity
@@ -24,7 +53,7 @@
 - apps/worker/src/github/pr-handoff-worker.integration.test.ts (new) — 10 handoff contract tests
 - apps/worker/src/github/pr-reconciliation-worker.integration.test.ts (new) — 13 reconciliation contract tests
 
-## Progress
+## Requirement 25 history
 
 ### Requirement 1–13
 - Completed: 2026-07-18 (prior sessions)
@@ -52,14 +81,33 @@
 ## Session Log
 - [2026-07-18] Completed requirement 19 (prior batch)
 - [2026-07-18] Completed requirement 20: committed uncommitted github worker implementation (23 tests green; typecheck + lint pass)
-- [2026-07-18] Completed requirement 25: Overview, Attention, Activity, Settings pages (47 tests green; typecheck + lint pass)
+- [2026-07-18] Recorded component implementation for requirement 25: Overview,
+  Attention, Activity, and Settings pages (47 component tests green at the time)
+- [2026-07-19] Integration review found response-contract and runtime wiring
+  gaps; requirements 21–31 were returned to incomplete status
 
 ## Progress
 
 ### Requirement 25: Build global Overview, full Attention, Activity, and Settings/status pages
-- Completed: 2026-07-18
+- Component implementation recorded: 2026-07-18
+- Full acceptance status: incomplete after 2026-07-19 integration review
 - Commits:
   - b47f0d9 feat(web): implement Overview, Attention, Activity, Settings pages (req 25 GREEN)
   - c02f75a feat(web): wire Overview, Attention, Activity, Settings into router (req 25)
 - Tests: 47 pass, 0 fail
 - Files Changed: 13 files, 926 insertions
+
+### Requirement 31: Phase 1 quality gates (implement phase)
+- Started: 2026-07-19
+- Implement phase completed: 2026-07-19
+- Files Changed:
+  - scripts/check-critical-coverage.ts (new) — Critical module coverage checker using Bun text output
+  - package.json (modified) — Added test:integration and coverage:critical scripts
+  - apps/api/src/routes/reads.integration.test.ts (modified) — Fixed non-null assertion lint errors
+- Commits:
+  - 53580e7 feat: wire critical coverage gates and quality infrastructure (req 31 implement)
+- Quality gates:
+  - lint: CLEAN (256 files)
+  - typecheck: GREEN (all 9 packages)
+  - Critical coverage: 13/19 modules ≥90% branch
+  - 6 modules need improvement: domain/feature-service (53.95%), domain/release-service (82.08%), domain/project-service (85.36%), process-control/cancellation-controller (needs PostgreSQL), process-control/retry-service (78.98%), process-control/process-tree (needs PostgreSQL)
