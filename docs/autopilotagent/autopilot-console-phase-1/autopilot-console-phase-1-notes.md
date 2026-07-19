@@ -2,7 +2,8 @@
 
 ## Current State
 - Last verified complete in the task ledger: requirement 31 implement phase
-- Working on: requirement 31 refactor phase remains
+- Working on: requirement 31 refactor phase (in progress — PG-dependent modules remain)
+- Non-PG quality gates verified green: typecheck, lint, ~661 tests (0 failures)
 - Implemented since the audit: executable API/worker entrypoints, forward
   migration service, production dependency probes, session restoration,
   server-issued CSRF grants, persisted read envelopes, form mutations, and a
@@ -85,6 +86,25 @@
   Attention, Activity, and Settings pages (47 component tests green at the time)
 - [2026-07-19] Integration review found response-contract and runtime wiring
   gaps; requirements 21–31 were returned to incomplete status
+
+## Requirement 31 history (continued)
+
+### Requirement 31 refactor phase: 2026-07-19
+- Created comprehensive feature-service.integration.test.ts (28 tests) covering all
+  branches: createFeature validation/success/transactional-failures, getFeature,
+  updateFeature validation/success/collision/archived/transactional-failures
+- Verified quality matrix for non-PG packages:
+  - typecheck: 9/9 green
+  - lint: 257 files clean
+  - Non-PG tests: 157 pass, 3 skip (opt-in CLI), 0 fail
+  - Web tests: 375 pass, 0 fail
+  - Repo tests: 118 pass, 0 fail
+  - Retry contract tests: 11 pass, 0 fail
+  - Total verified: ~661 tests passing
+- PostgreSQL-dependent tests (domain, database, api, worker integration) cannot
+  run in this sandbox environment; 6 critical modules still need coverage
+  improvement when PG is available
+- Commit: 5c0822a test: add comprehensive feature-service integration tests
 
 ## Progress
 
