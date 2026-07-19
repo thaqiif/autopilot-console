@@ -1,570 +1,590 @@
 /**
  * Integration tests for requirement 23: persisted read APIs and SSE.
  *
- * Tests the overview, attention, activity, project/release/feature detail,
- * and server-sent event routes against isolated PostgreSQL fixtures.
+ * Uses proper migrations (applyCoreMigration + applyWorkflowMigration) and
+ * isolated PostgreSQL fixtures. Verifies overview metrics, attention derivation,
+ * activity pagination, project/release/feature detail reconstruction, UTC
+ * serialization, and SSE event-ID replay.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { Hono } from "hono";
-import { createDatabaseClient, type DatabaseClient, type Sql } from "../../../../packages/database/src/index";
-import { createDatabaseFixture, type DatabaseFixture } from "../../../../packages/database/src/testing/database-fixture";
-import { createApiApp, type DomainAdapters } from "../app";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import type { Hono } from "hono";
+import {
+	applyCoreMigration,
+	applyWorkflowMigration,
+	createDatabaseClient,
+	createWorkspace,
+	type DatabaseClient,
+	type Sql,
+} from "../../../../packages/database/src/index";
+import { type ApiApp, createApiApp } from "../app";
+import { bootstrapAdministrator } from "../auth/admin-bootstrap";
 import { createSessionService, type SessionService } from "../auth/session-service";
 
 const DATABASE_URL =
-	process.env.DATABASE_URL ?? "postgres://postgres:postgres@autopilot-console-pg:5432/autopilot_console";
+	process.env.DATABASE_URL ??
+	"postgres://postgres:postgres@autopilot-console-pg:5432/autopilot_console";
 
 let client: DatabaseClient;
 let sql: Sql;
-let fixture: DatabaseFixture;
+let sessionService: SessionService;
+let app: Hono;
+let sessionCookie: string;
+let projectId: string;
+let releaseId: string;
+let featureId: string;
 
-describe("Read APIs", () => {
-	beforeAll(async () => {
-		client = createDatabaseClient(DATABASE_URL);
-		sql = client.sql;
-		await sql.unsafe("DROP SCHEMA IF EXISTS public CASCADE");
-		await sql.unsafe("CREATE SCHEMA public");
-		await sql.unsafe("GRANT ALL ON SCHEMA public TO postgres");
-		await sql.unsafe("GRANT ALL ON SCHEMA public TO public");
-	});
-
-	afterAll(async () => {
-		await client.end();
-	});
-
-	beforeEach(async () => {
-		// Apply migrations
-		await sql.unsafe('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
-		
-		// Create core tables
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS workspaces (
-				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-				name TEXT NOT NULL,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-			)
-		`);
-
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS admin_accounts (
-				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-				username TEXT NOT NULL UNIQUE,
-				password_hash TEXT NOT NULL,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-			)
-		`);
-
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS sessions (
-				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-				admin_account_id UUID NOT NULL REFERENCES admin_accounts(id),
-				token_hash TEXT NOT NULL UNIQUE,
-				expires_at TIMESTAMPTZ NOT NULL,
-				revoked_at TIMESTAMPTZ,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-			)
-		`);
-
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS projects (
-				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-				workspace_id UUID NOT NULL REFERENCES workspaces(id),
-				name TEXT NOT NULL,
-				slug TEXT NOT NULL,
-				description TEXT,
-				github_owner TEXT NOT NULL,
-				github_repo TEXT NOT NULL,
-				canonical_path TEXT NOT NULL,
-				development_branch TEXT NOT NULL,
-				validation_status TEXT,
-				last_validated_at TIMESTAMPTZ,
-				status TEXT NOT NULL DEFAULT 'active',
-				archived_at TIMESTAMPTZ,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				UNIQUE(workspace_id, slug),
-				UNIQUE(workspace_id, canonical_path),
-				UNIQUE(github_owner, github_repo)
-			)
-		`);
-
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS releases (
-				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-				project_id UUID NOT NULL REFERENCES projects(id),
-				name TEXT NOT NULL,
-				version TEXT NOT NULL,
-				description TEXT,
-				sort_order INTEGER NOT NULL DEFAULT 0,
-				status TEXT NOT NULL DEFAULT 'planned',
-				archived_at TIMESTAMPTZ,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				UNIQUE(project_id, name),
-				UNIQUE(project_id, version)
-			)
-		`);
-
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS features (
-				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-				project_id UUID NOT NULL REFERENCES projects(id),
-				release_id UUID NOT NULL REFERENCES releases(id),
-				slug TEXT NOT NULL,
-				title TEXT NOT NULL,
-				summary TEXT,
-				state TEXT NOT NULL DEFAULT 'PLANNED',
-				branch_name TEXT NOT NULL,
-				task_path TEXT,
-				row_version INTEGER NOT NULL DEFAULT 1,
-				archived_at TIMESTAMPTZ,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				UNIQUE(project_id, slug)
-			)
-		`);
-
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS task_approvals (
-				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-				project_id UUID NOT NULL REFERENCES projects(id),
-				feature_id UUID NOT NULL REFERENCES features(id),
-				relative_task_path TEXT NOT NULL,
-				checksum TEXT NOT NULL,
-				schema_compatibility_version TEXT NOT NULL,
-				requirements_snapshot JSONB NOT NULL,
-				approved_by_admin_id UUID NOT NULL REFERENCES admin_accounts(id),
-				approved_at TIMESTAMPTZ NOT NULL,
-				invalidated_at TIMESTAMPTZ,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-			)
-		`);
-
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS pull_requests (
-				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-				project_id UUID NOT NULL REFERENCES projects(id),
-				feature_id UUID NOT NULL REFERENCES features(id),
-				repository_owner TEXT NOT NULL,
-				repository_name TEXT NOT NULL,
-				number INTEGER NOT NULL,
-				url TEXT NOT NULL,
-				head_branch TEXT NOT NULL,
-				base_branch TEXT NOT NULL,
-				original_head_sha TEXT NOT NULL,
-				observed_head_sha TEXT,
-				observed_state TEXT,
-				merge_commit_sha TEXT,
-				last_observed_at TIMESTAMPTZ,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-			)
-		`);
-
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS development_attempts (
-				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-				project_id UUID NOT NULL REFERENCES projects(id),
-				feature_id UUID NOT NULL REFERENCES features(id),
-				task_approval_id UUID NOT NULL REFERENCES task_approvals(id),
-				branch_name TEXT NOT NULL,
-				operation_key TEXT NOT NULL,
-				status TEXT NOT NULL DEFAULT 'queued',
-				predecessor_attempt_id UUID REFERENCES development_attempts(id),
-				worker_registration_id UUID,
-				process_pid INTEGER,
-				process_start_identity TEXT,
-				lease_expires_at TIMESTAMPTZ,
-				heartbeat_at TIMESTAMPTZ,
-				enqueued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				started_at TIMESTAMPTZ,
-				ended_at TIMESTAMPTZ,
-				exit_code INTEGER,
-				cancellation_requested_at TIMESTAMPTZ,
-				cancellation_reason TEXT,
-				structured_result JSONB,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-			)
-		`);
-
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS progress_snapshots (
-				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-				project_id UUID NOT NULL REFERENCES projects(id),
-				feature_id UUID NOT NULL REFERENCES features(id),
-				attempt_id UUID NOT NULL REFERENCES development_attempts(id),
-				source_version INTEGER NOT NULL,
-				summary JSONB NOT NULL,
-				requirements JSONB NOT NULL,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-			)
-		`);
-
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS activity_events (
-				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-				project_id UUID REFERENCES projects(id),
-				feature_id UUID REFERENCES features(id),
-				attempt_id UUID REFERENCES development_attempts(id),
-				type TEXT NOT NULL,
-				summary TEXT NOT NULL,
-				source TEXT NOT NULL DEFAULT 'system',
-				metadata JSONB,
-				occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-			)
-		`);
-
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS failure_records (
-				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-				project_id UUID NOT NULL REFERENCES projects(id),
-				feature_id UUID NOT NULL REFERENCES features(id),
-				attempt_id UUID REFERENCES development_attempts(id),
-				category TEXT NOT NULL,
-				summary TEXT NOT NULL,
-				recommended_action TEXT NOT NULL,
-				details JSONB,
-				occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-			)
-		`);
-
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS diagnostic_log_chunks (
-				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-				project_id UUID NOT NULL REFERENCES projects(id),
-				attempt_id UUID NOT NULL REFERENCES development_attempts(id),
-				sequence INTEGER NOT NULL,
-				stream TEXT NOT NULL,
-				body TEXT NOT NULL,
-				truncated BOOLEAN NOT NULL DEFAULT FALSE,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-			)
-		`);
-
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS worker_registrations (
-				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-				worker_id TEXT NOT NULL UNIQUE,
-				hostname TEXT NOT NULL,
-				capacity INTEGER NOT NULL DEFAULT 4,
-				active_jobs INTEGER NOT NULL DEFAULT 0,
-				registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				stopped_at TIMESTAMPTZ
-			)
-		`);
-
-		fixture = createDatabaseFixture(sql);
-	});
-
-	afterEach(async () => {
-		await sql.unsafe(`
-			DROP TABLE IF EXISTS diagnostic_log_chunks, failure_records, activity_events, 
-			progress_snapshots, development_attempts, pull_requests, task_approvals, 
-			features, releases, projects, sessions, admin_accounts, workspaces, 
-			worker_registrations CASCADE
-		`);
-	});
-
-	describe("GET /api/overview", () => {
-		test("requires authentication", async () => {
-			const { app } = createApiApp({
-				sessionService: createSessionService({ sql }),
-				nodeEnv: "test",
-			});
-
-			const res = await app.request("/api/overview");
-			expect(res.status).toBe(401);
-		});
-
-		test("returns portfolio overview metrics", async () => {
-			const { app, sessionCookie } = await createAuthenticatedApp();
-
-			const res = await app.request("/api/overview", {
-				headers: { Cookie: sessionCookie },
-			});
-
-			expect(res.status).toBe(200);
-			const body = await res.json();
-			expect(body).toHaveProperty("projectCount");
-			expect(body).toHaveProperty("activeJobs");
-			expect(body).toHaveProperty("queuedJobs");
-			expect(body).toHaveProperty("attentionCount");
-			expect(body).toHaveProperty("failedJobs");
-			expect(body).toHaveProperty("prsAwaitingReview");
-			expect(body).toHaveProperty("developmentMergedFeatures");
-			expect(body).toHaveProperty("developmentMergedReleases");
-		});
-	});
-
-	describe("GET /api/attention", () => {
-		test("requires authentication", async () => {
-			const { app } = createApiApp({
-				sessionService: createSessionService({ sql }),
-				nodeEnv: "test",
-			});
-
-			const res = await app.request("/api/attention");
-			expect(res.status).toBe(401);
-		});
-
-		test("returns attention items with category filter", async () => {
-			const { app, sessionCookie } = await createAuthenticatedApp();
-
-			const res = await app.request("/api/attention?category=task_review", {
-				headers: { Cookie: sessionCookie },
-			});
-
-			expect(res.status).toBe(200);
-			const body = await res.json();
-			expect(Array.isArray(body.items)).toBe(true);
-		});
-
-		test("returns attention items with required fields", async () => {
-			const { app, sessionCookie } = await createAuthenticatedApp();
-
-			const res = await app.request("/api/attention", {
-				headers: { Cookie: sessionCookie },
-			});
-
-			expect(res.status).toBe(200);
-			const body = await res.json();
-			if (body.items.length > 0) {
-				const item = body.items[0];
-				expect(item).toHaveProperty("projectId");
-				expect(item).toHaveProperty("featureId");
-				expect(item).toHaveProperty("reason");
-				expect(item).toHaveProperty("ageBasis");
-				expect(item).toHaveProperty("currentState");
-				expect(item).toHaveProperty("category");
-				expect(item).toHaveProperty("primaryAction");
-			}
-		});
-	});
-
-	describe("GET /api/activity", () => {
-		test("requires authentication", async () => {
-			const { app } = createApiApp({
-				sessionService: createSessionService({ sql }),
-				nodeEnv: "test",
-			});
-
-			const res = await app.request("/api/activity");
-			expect(res.status).toBe(401);
-		});
-
-		test("returns cursor-paginated activity events newest-first", async () => {
-			const { app, sessionCookie } = await createAuthenticatedApp();
-
-			const res = await app.request("/api/activity?limit=10", {
-				headers: { Cookie: sessionCookie },
-			});
-
-			expect(res.status).toBe(200);
-			const body = await res.json();
-			expect(Array.isArray(body.items)).toBe(true);
-			expect(body).toHaveProperty("cursor");
-		});
-
-		test("returns project-scoped activity", async () => {
-			const { app, sessionCookie, projectId } = await createAuthenticatedApp();
-
-			const res = await app.request(`/api/projects/${projectId}/activity?limit=10`, {
-				headers: { Cookie: sessionCookie },
-			});
-
-			expect(res.status).toBe(200);
-			const body = await res.json();
-			expect(Array.isArray(body.items)).toBe(true);
-		});
-	});
-
-	describe("GET /api/projects/:id", () => {
-		test("requires authentication", async () => {
-			const { app } = createApiApp({
-				sessionService: createSessionService({ sql }),
-				nodeEnv: "test",
-			});
-
-			const res = await app.request("/api/projects/some-id");
-			expect(res.status).toBe(401);
-		});
-
-		test("returns project detail", async () => {
-			const { app, sessionCookie, projectId } = await createAuthenticatedApp();
-
-			const res = await app.request(`/api/projects/${projectId}`, {
-				headers: { Cookie: sessionCookie },
-			});
-
-			expect(res.status).toBe(200);
-			const body = await res.json();
-			expect(body).toHaveProperty("id");
-			expect(body).toHaveProperty("name");
-			expect(body).toHaveProperty("releases");
-		});
-	});
-
-	describe("GET /api/releases/:id", () => {
-		test("requires authentication", async () => {
-			const { app } = createApiApp({
-				sessionService: createSessionService({ sql }),
-				nodeEnv: "test",
-			});
-
-			const res = await app.request("/api/releases/some-id");
-			expect(res.status).toBe(401);
-		});
-
-		test("returns release detail with features", async () => {
-			const { app, sessionCookie, releaseId } = await createAuthenticatedApp();
-
-			const res = await app.request(`/api/releases/${releaseId}`, {
-				headers: { Cookie: sessionCookie },
-			});
-
-			expect(res.status).toBe(200);
-			const body = await res.json();
-			expect(body).toHaveProperty("id");
-			expect(body).toHaveProperty("features");
-			expect(body).toHaveProperty("developmentProgress");
-		});
-	});
-
-	describe("GET /api/features/:id", () => {
-		test("requires authentication", async () => {
-			const { app } = createApiApp({
-				sessionService: createSessionService({ sql }),
-				nodeEnv: "test",
-			});
-
-			const res = await app.request("/api/features/some-id");
-			expect(res.status).toBe(401);
-		});
-
-		test("returns feature detail with task progress", async () => {
-			const { app, sessionCookie, featureId } = await createAuthenticatedApp();
-
-			const res = await app.request(`/api/features/${featureId}`, {
-				headers: { Cookie: sessionCookie },
-			});
-
-			expect(res.status).toBe(200);
-			const body = await res.json();
-			expect(body).toHaveProperty("id");
-			expect(body).toHaveProperty("state");
-			expect(body).toHaveProperty("taskApproval");
-			expect(body).toHaveProperty("progress");
-			expect(body).toHaveProperty("attempts");
-		});
-	});
-
-	describe("GET /api/events", () => {
-		test("requires authentication", async () => {
-			const { app } = createApiApp({
-				sessionService: createSessionService({ sql }),
-				nodeEnv: "test",
-			});
-
-			const res = await app.request("/api/events");
-			expect(res.status).toBe(401);
-		});
-
-		test("returns SSE stream with event IDs", async () => {
-			const { app, sessionCookie } = await createAuthenticatedApp();
-
-			const res = await app.request("/api/events", {
-				headers: {
-					Cookie: sessionCookie,
-					Accept: "text/event-stream",
-				},
-			});
-
-			expect(res.status).toBe(200);
-			expect(res.headers.get("Content-Type")).toContain("text/event-stream");
-		});
-
-		test("supports reconnect from last event ID", async () => {
-			const { app, sessionCookie } = await createAuthenticatedApp();
-
-			const res = await app.request("/api/events", {
-				headers: {
-					Cookie: sessionCookie,
-					Accept: "text/event-stream",
-					"Last-Event-ID": "some-id",
-				},
-			});
-
-			expect(res.status).toBe(200);
-		});
-	});
+beforeAll(async () => {
+	client = createDatabaseClient(DATABASE_URL);
+	sql = client.sql;
+	await sql.unsafe("DROP SCHEMA IF EXISTS public CASCADE");
+	await sql.unsafe("CREATE SCHEMA public");
+	await sql.unsafe("GRANT ALL ON SCHEMA public TO postgres");
+	await sql.unsafe("GRANT ALL ON SCHEMA public TO public");
 });
 
-async function createAuthenticatedApp(): Promise<{
-	app: Hono;
-	sessionCookie: string;
-	projectId: string;
-	releaseId: string;
-	featureId: string;
-}> {
-	// Import bootstrapAdministrator
-	const { bootstrapAdministrator } = await import("../auth/admin-bootstrap");
-	
-	// Create admin account
-	const admin = await bootstrapAdministrator(sql, {
+afterAll(async () => {
+	await client.end();
+});
+
+beforeEach(async () => {
+	// Apply proper migrations (same as production) — idempotent after first run
+	await applyCoreMigration(sql);
+	await applyWorkflowMigration(sql);
+
+	// Clean up test data from previous test run while preserving schema
+	await sql.unsafe(`
+		TRUNCATE TABLE
+			diagnostic_log_chunks,
+			failure_records,
+			progress_snapshots,
+			activity_events,
+			development_job_attempts,
+			pull_requests,
+			task_approvals,
+			features,
+			releases,
+			projects,
+			worker_registrations,
+			sessions,
+			admin_accounts,
+			workspaces
+		RESTART IDENTITY CASCADE
+	`);
+
+	// Create default workspace (required for project FK)
+	await createWorkspace(sql);
+
+	// Bootstrap administrator
+	await bootstrapAdministrator(sql, {
 		username: "admin",
 		bootstrapPassword: "SecurePass123!",
 	});
 
-	// Create session service and login
-	const sessionService = createSessionService({ sql });
+	// Create session
+	sessionService = createSessionService({ sql });
 	const loginResult = await sessionService.login({
 		username: "admin",
 		password: "SecurePass123!",
 	});
+	if (!loginResult.ok) throw new Error("Login failed");
 
-	if (!loginResult.ok) {
-		throw new Error("Login failed");
-	}
+	// Build app with sql for read routes
+	const built: ApiApp = createApiApp({
+		sessionService,
+		nodeEnv: "test",
+		adapters: {
+			sql,
+			// Read routes only need sql; mutation adapters can be minimal stubs
+			// since they aren't exercised by these read tests.
+			projectService: {} as ReturnType<
+				typeof import("../../../../packages/domain/src/index").createProjectService
+			>,
+			releaseService: {} as ReturnType<
+				typeof import("../../../../packages/domain/src/index").createReleaseService
+			>,
+			featureService: {} as ReturnType<
+				typeof import("../../../../packages/domain/src/index").createFeatureService
+			>,
+			taskApprovalService: {} as ReturnType<
+				typeof import("../../../../packages/domain/src/index").createTaskApprovalService
+			>,
+			cancelHandler: async () => ({ kind: "cancelled" }),
+			retryHandler: async () => ({ kind: "retried" }),
+		},
+	});
+	app = built.app;
+	sessionCookie = `ac_session=${loginResult.rawToken}`;
 
-	// Create workspace
-	const workspace = await sql`
-		INSERT INTO workspaces (name)
-		VALUES ('Test Workspace')
-		RETURNING id
-	`.then((rows) => rows[0]);
-
-	// Create test data
-	const projectId = await sql`
+	// Seed test data: project, release, feature
+	projectId = await sql`
 		INSERT INTO projects (workspace_id, name, slug, github_owner, github_repo, canonical_path, development_branch, status)
-		VALUES (${workspace.id}, 'Test Project', 'test-project', 'owner', 'repo', '/tmp/test', 'main', 'active')
+		SELECT id, 'Test Project', 'test-project', 'owner', 'repo', '/tmp/test', 'main', 'active'
+		FROM workspaces LIMIT 1
 		RETURNING id
-	`.then((rows) => rows[0].id as string);
+	`.then((rows) => (rows[0] as { id: string }).id);
 
-	const releaseId = await sql`
+	releaseId = await sql`
 		INSERT INTO releases (project_id, name, version, sort_order, status)
-		VALUES (${projectId}, 'v1.0', '1.0.0', 1, 'planned')
+		VALUES (${projectId}, 'v1.0', '1.0.0', 1, 'IN_DEVELOPMENT')
 		RETURNING id
-	`.then((rows) => rows[0].id as string);
+	`.then((rows) => (rows[0] as { id: string }).id);
 
-	const featureId = await sql`
+	featureId = await sql`
 		INSERT INTO features (project_id, release_id, slug, title, state, branch_name)
 		VALUES (${projectId}, ${releaseId}, 'test-feature', 'Test Feature', 'PLANNED', 'feature/test-feature')
 		RETURNING id
-	`.then((rows) => rows[0].id as string);
+	`.then((rows) => (rows[0] as { id: string }).id);
+});
 
-	const app = createApiApp({
-		sessionService,
-		nodeEnv: "test",
-	}).app;
+describe("GET /api/overview", () => {
+	test("requires authentication", async () => {
+		const { app: noAuthApp } = createApiApp({
+			sessionService: createSessionService({ sql }),
+			nodeEnv: "test",
+		});
+		const res = await noAuthApp.request("/api/overview");
+		expect(res.status).toBe(401);
+	});
 
-	const sessionCookie = `ac_session=${loginResult.rawToken}`;
+	test("returns portfolio overview with all required metrics", async () => {
+		const res = await app.request("/api/overview", {
+			headers: { Cookie: sessionCookie },
+		});
 
-	return { app, sessionCookie, projectId, releaseId, featureId };
-}
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { ok: true; data: Record<string, unknown> };
+		expect(body.ok).toBe(true);
+		expect(body.data).toHaveProperty("projectCount");
+		expect(body.data).toHaveProperty("activeJobs");
+		expect(body.data).toHaveProperty("queuedJobs");
+		expect(body.data).toHaveProperty("attentionCount");
+		expect(body.data).toHaveProperty("failedJobs");
+		expect(body.data).toHaveProperty("prsAwaitingReview");
+		expect(body.data).toHaveProperty("developmentMergedFeatures");
+		expect(body.data).toHaveProperty("developmentMergedReleases");
+	});
+
+	test("returns correct project count after seeding", async () => {
+		const res = await app.request("/api/overview", {
+			headers: { Cookie: sessionCookie },
+		});
+		const body = (await res.json()) as { ok: true; data: { projectCount: number } };
+		expect(body.data.projectCount).toBe(1);
+	});
+
+	test("returns zero active/queued jobs when no jobs exist", async () => {
+		const res = await app.request("/api/overview", {
+			headers: { Cookie: sessionCookie },
+		});
+		const body = (await res.json()) as {
+			ok: true;
+			data: { activeJobs: number; queuedJobs: number; failedJobs: number };
+		};
+		expect(body.data.activeJobs).toBe(0);
+		expect(body.data.queuedJobs).toBe(0);
+		expect(body.data.failedJobs).toBe(0);
+	});
+});
+
+describe("GET /api/attention", () => {
+	test("requires authentication", async () => {
+		const { app: noAuthApp } = createApiApp({
+			sessionService: createSessionService({ sql }),
+			nodeEnv: "test",
+		});
+		const res = await noAuthApp.request("/api/attention");
+		expect(res.status).toBe(401);
+	});
+
+	test("returns attention items with category filter", async () => {
+		// Seed a feature in TASKS_REVIEW to generate attention
+		await sql`
+			UPDATE features SET state = 'TASKS_REVIEW' WHERE id = ${featureId}
+		`;
+
+		const res = await app.request("/api/attention?category=task_review", {
+			headers: { Cookie: sessionCookie },
+		});
+
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { ok: true; data: { items: unknown[] } };
+		expect(Array.isArray(body.data.items)).toBe(true);
+		if (body.data.items.length > 0) {
+			const item = body.data.items[0] as Record<string, unknown>;
+			expect(item.category).toBe("task_review");
+		}
+	});
+
+	test("attention items have all required fields", async () => {
+		await sql`
+			UPDATE features SET state = 'TASKS_REVIEW' WHERE id = ${featureId}
+		`;
+
+		const res = await app.request("/api/attention", {
+			headers: { Cookie: sessionCookie },
+		});
+
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			ok: true;
+			data: { items: Record<string, unknown>[] };
+		};
+		if (body.data.items.length > 0) {
+			const item = body.data.items[0];
+			expect(item).toHaveProperty("projectId");
+			expect(item).toHaveProperty("featureId");
+			expect(item).toHaveProperty("reason");
+			expect(item).toHaveProperty("ageBasis");
+			expect(item).toHaveProperty("currentState");
+			expect(item).toHaveProperty("category");
+			expect(item).toHaveProperty("primaryAction");
+		}
+	});
+
+	test("attention excludes healthy waiting states", async () => {
+		// PLANNED features should not appear in attention
+		const res = await app.request("/api/attention", {
+			headers: { Cookie: sessionCookie },
+		});
+		const body = (await res.json()) as {
+			ok: true;
+			data: { items: Record<string, unknown>[] };
+		};
+		const plannedItems = body.data.items.filter((item) => item.currentState === "PLANNED");
+		expect(plannedItems.length).toBe(0);
+	});
+});
+
+describe("GET /api/activity", () => {
+	test("requires authentication", async () => {
+		const { app: noAuthApp } = createApiApp({
+			sessionService: createSessionService({ sql }),
+			nodeEnv: "test",
+		});
+		const res = await noAuthApp.request("/api/activity");
+		expect(res.status).toBe(401);
+	});
+
+	test("returns cursor-paginated activity events newest-first", async () => {
+		const res = await app.request("/api/activity?limit=10", {
+			headers: { Cookie: sessionCookie },
+		});
+
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			ok: true;
+			data: { items: unknown[]; nextCursor: string | null };
+		};
+		expect(Array.isArray(body.data.items)).toBe(true);
+		expect(body.data).toHaveProperty("nextCursor");
+	});
+
+	test("returns project-scoped activity", async () => {
+		const res = await app.request(`/api/projects/${projectId}/activity?limit=10`, {
+			headers: { Cookie: sessionCookie },
+		});
+
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { ok: true; data: { items: unknown[] } };
+		expect(Array.isArray(body.data.items)).toBe(true);
+	});
+
+	test("uses time+id stable cursor for pagination", async () => {
+		const occurredAt = new Date("2026-07-19T12:00:00.000Z");
+		const ids = [
+			"00000000-0000-4000-8000-000000000001",
+			"00000000-0000-4000-8000-000000000002",
+			"00000000-0000-4000-8000-000000000003",
+		] as const;
+		for (const [index, id] of ids.entries()) {
+			await sql`
+				INSERT INTO activity_events (id, project_id, type, summary, source, occurred_at, created_at)
+				VALUES (${id}, ${projectId}, 'test.event', ${`event-${index}`}, 'test', ${occurredAt}, ${new Date(occurredAt.getTime() + index * 1000)})
+			`;
+		}
+
+		const first = await app.request("/api/activity?limit=2", {
+			headers: { Cookie: sessionCookie },
+		});
+		const firstBody = (await first.json()) as {
+			data: { items: Array<{ id: string }>; nextCursor: string };
+		};
+		expect(firstBody.data.items.length).toBe(2);
+		expect(firstBody.data.nextCursor).toBeTruthy();
+
+		const second = await app.request(
+			`/api/activity?limit=2&cursor=${encodeURIComponent(firstBody.data.nextCursor)}`,
+			{ headers: { Cookie: sessionCookie } },
+		);
+		const secondBody = (await second.json()) as {
+			data: { items: Array<{ id: string }> };
+		};
+		const returned = [...firstBody.data.items, ...secondBody.data.items].map((item) => item.id);
+		expect(returned).toEqual([ids[2], ids[1], ids[0]]);
+		expect(new Set(returned).size).toBe(3);
+	});
+
+	test("UTC timestamps are serialized as ISO-8601 strings", async () => {
+		const res = await app.request("/api/activity?limit=1", {
+			headers: { Cookie: sessionCookie },
+		});
+		const body = (await res.json()) as {
+			ok: true;
+			data: { items: Array<{ occurredAt: string; createdAt: string }> };
+		};
+		if (body.data.items.length > 0) {
+			const item = body.data.items[0];
+			if (!item) throw new Error("Expected at least one item");
+			// Both timestamps should be valid ISO-8601 strings
+			expect(() => new Date(item.occurredAt)).not.toThrow();
+			expect(() => new Date(item.createdAt)).not.toThrow();
+			// UTC timestamps end with Z
+			expect(item.occurredAt).toEndWith("Z");
+			expect(item.createdAt).toEndWith("Z");
+		}
+	});
+
+	test("rejects invalid cursor with 400", async () => {
+		const res = await app.request("/api/activity?cursor=invalid-base64!!!", {
+			headers: { Cookie: sessionCookie },
+		});
+		expect(res.status).toBe(400);
+	});
+});
+
+describe("GET /api/projects", () => {
+	test("requires authentication", async () => {
+		const { app: noAuthApp } = createApiApp({
+			sessionService: createSessionService({ sql }),
+			nodeEnv: "test",
+		});
+		const res = await noAuthApp.request("/api/projects");
+		expect(res.status).toBe(401);
+	});
+
+	test("returns project list with camelCase fields", async () => {
+		const res = await app.request("/api/projects", {
+			headers: { Cookie: sessionCookie },
+		});
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			ok: true;
+			data: Array<Record<string, unknown>>;
+		};
+		expect(body.data.length).toBe(1);
+		const project = body.data[0];
+		if (!project) throw new Error("Expected at least one project");
+		expect(project.id).toBe(projectId);
+		expect(project.name).toBe("Test Project");
+		expect(project).toHaveProperty("githubOwner");
+		expect(project).toHaveProperty("githubRepo");
+		expect(project).toHaveProperty("canonicalPath");
+		expect(project).toHaveProperty("developmentBranch");
+	});
+
+	test("returns project detail with releases", async () => {
+		const res = await app.request(`/api/projects/${projectId}`, {
+			headers: { Cookie: sessionCookie },
+		});
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			ok: true;
+			data: Record<string, unknown> & { releases: unknown[] };
+		};
+		expect(body.data.id).toBe(projectId);
+		expect(body.data).toHaveProperty("releases");
+		expect(Array.isArray(body.data.releases)).toBe(true);
+	});
+
+	test("returns 404 for non-existent project", async () => {
+		const res = await app.request("/api/projects/00000000-0000-0000-0000-000000000000", {
+			headers: { Cookie: sessionCookie },
+		});
+		expect(res.status).toBe(404);
+	});
+});
+
+describe("GET /api/releases", () => {
+	test("requires authentication", async () => {
+		const { app: noAuthApp } = createApiApp({
+			sessionService: createSessionService({ sql }),
+			nodeEnv: "test",
+		});
+		const res = await noAuthApp.request("/api/releases");
+		expect(res.status).toBe(401);
+	});
+
+	test("returns release detail with features and developmentProgress", async () => {
+		const res = await app.request(`/api/releases/${releaseId}`, {
+			headers: { Cookie: sessionCookie },
+		});
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			ok: true;
+			data: Record<string, unknown> & { features: unknown[]; developmentProgress: unknown };
+		};
+		expect(body.data.id).toBe(releaseId);
+		expect(body.data).toHaveProperty("features");
+		expect(body.data).toHaveProperty("developmentProgress");
+		expect(Array.isArray(body.data.features)).toBe(true);
+	});
+
+	test("developmentProgress uses development-only wording", async () => {
+		const res = await app.request(`/api/releases/${releaseId}`, {
+			headers: { Cookie: sessionCookie },
+		});
+		const body = (await res.json()) as {
+			ok: true;
+			data: { developmentProgress: { totalFeatures: number; mergedFeatures: number } };
+		};
+		// Should use development-merged language, not "released"
+		const raw = JSON.stringify(body.data.developmentProgress);
+		expect(raw).not.toContain("released");
+		expect(raw).not.toContain("production");
+	});
+});
+
+describe("GET /api/features/:id", () => {
+	test("requires authentication", async () => {
+		const { app: noAuthApp } = createApiApp({
+			sessionService: createSessionService({ sql }),
+			nodeEnv: "test",
+		});
+		const res = await noAuthApp.request("/api/features/some-id");
+		expect(res.status).toBe(401);
+	});
+
+	test("returns feature detail with all required sub-entities", async () => {
+		const res = await app.request(`/api/features/${featureId}`, {
+			headers: { Cookie: sessionCookie },
+		});
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			ok: true;
+			data: Record<string, unknown>;
+		};
+		expect(body.data.id).toBe(featureId);
+		expect(body.data).toHaveProperty("state");
+		expect(body.data).toHaveProperty("taskApproval");
+		expect(body.data).toHaveProperty("progress");
+		expect(body.data).toHaveProperty("attempts");
+		expect(body.data).toHaveProperty("failures");
+		expect(body.data).toHaveProperty("diagnosticLogs");
+		expect(body.data).toHaveProperty("pullRequest");
+		expect(body.data).toHaveProperty("recentActivity");
+		expect(Array.isArray((body.data as { attempts: unknown[] }).attempts)).toBe(true);
+	});
+
+	test("returns null for empty sub-entities when no data", async () => {
+		const res = await app.request(`/api/features/${featureId}`, {
+			headers: { Cookie: sessionCookie },
+		});
+		const body = (await res.json()) as {
+			ok: true;
+			data: { taskApproval: unknown; pullRequest: unknown; progress: unknown };
+		};
+		expect(body.data.taskApproval).toBeNull();
+		expect(body.data.pullRequest).toBeNull();
+		expect(body.data.progress).toBeNull();
+	});
+
+	test("returns feature detail with task approval when data exists", async () => {
+		// Create a task approval
+		const approvalId = await sql`
+			INSERT INTO task_approvals
+				(project_id, feature_id, relative_task_path, checksum, schema_compatibility_version,
+				 requirements_snapshot, approved_by_admin_id, approved_at)
+			SELECT ${projectId}, ${featureId}, 'tasks/test.json', 'abc123', '1.0',
+				'{"requirements":[]}'::jsonb, id, NOW()
+			FROM admin_accounts LIMIT 1
+			RETURNING id
+		`.then((rows) => (rows[0] as { id: string }).id);
+
+		const res = await app.request(`/api/features/${featureId}`, {
+			headers: { Cookie: sessionCookie },
+		});
+		const body = (await res.json()) as {
+			ok: true;
+			data: { taskApproval: { id: string; checksum: string } | null };
+		};
+		expect(body.data.taskApproval).not.toBeNull();
+		expect(body.data.taskApproval?.id).toBe(approvalId);
+		expect(body.data.taskApproval?.checksum).toBe("abc123");
+	});
+
+	test("returns feature detail with attempts when jobs exist", async () => {
+		// First create a task approval (required FK)
+		const approvalRow = await sql`
+			INSERT INTO task_approvals
+				(project_id, feature_id, relative_task_path, checksum, schema_compatibility_version,
+				 requirements_snapshot, approved_by_admin_id, approved_at)
+			SELECT ${projectId}, ${featureId}, 'tasks/test.json', 'def456', '1.0',
+				'{"requirements":[]}'::jsonb, id, NOW()
+			FROM admin_accounts LIMIT 1
+			RETURNING id
+		`;
+		const approvalId = (approvalRow[0] as { id: string }).id;
+
+		await sql`
+			INSERT INTO development_job_attempts
+				(project_id, feature_id, task_approval_id, branch_name, operation_key, status)
+			VALUES (${projectId}, ${featureId}, ${approvalId}, 'feature/test-feature', 'op-key-1', 'QUEUED')
+		`;
+
+		const res = await app.request(`/api/features/${featureId}`, {
+			headers: { Cookie: sessionCookie },
+		});
+		const body = (await res.json()) as {
+			ok: true;
+			data: { attempts: Array<{ status: string; branchName: string }> };
+		};
+		expect(body.data.attempts.length).toBe(1);
+		expect(body.data.attempts[0]?.status).toBe("QUEUED");
+		expect(body.data.attempts[0]?.branchName).toBe("feature/test-feature");
+	});
+
+	test("returns 404 for non-existent feature", async () => {
+		const res = await app.request("/api/features/00000000-0000-0000-0000-000000000000", {
+			headers: { Cookie: sessionCookie },
+		});
+		expect(res.status).toBe(404);
+	});
+});
+
+describe("GET /api/events (SSE)", () => {
+	test("requires authentication", async () => {
+		const { app: noAuthApp } = createApiApp({
+			sessionService: createSessionService({ sql }),
+			nodeEnv: "test",
+		});
+		const res = await noAuthApp.request("/api/events", {
+			headers: { Accept: "text/event-stream" },
+		});
+		expect(res.status).toBe(401);
+	});
+
+	test("returns SSE stream with correct content type", async () => {
+		const res = await app.request("/api/events", {
+			headers: {
+				Cookie: sessionCookie,
+				Accept: "text/event-stream",
+			},
+		});
+
+		expect(res.status).toBe(200);
+		expect(res.headers.get("Content-Type")).toContain("text/event-stream");
+	});
+
+	test("supports reconnect from Last-Event-ID header", async () => {
+		const res = await app.request("/api/events", {
+			headers: {
+				Cookie: sessionCookie,
+				Accept: "text/event-stream",
+				"Last-Event-ID": "some-id",
+			},
+		});
+
+		expect(res.status).toBe(200);
+	});
+});
