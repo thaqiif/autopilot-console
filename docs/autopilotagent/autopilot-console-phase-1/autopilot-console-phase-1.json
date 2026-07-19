@@ -962,21 +962,6 @@
         "A release with any queued or active feature job cannot be archived; allowed archival retains history.",
         "Every create, validation rejection, update, and archive mutation records an append-only audit and structured activity event in the same transaction."
       ],
-      "tdd": {
-        "test": {
-          "description": "Write release/feature integration tests first for creation, ordering, project-scoped uniqueness, cross-project rejection, PLANNED defaults, deterministic branches, development status/progress, archive guards, activity/audit atomicity, and rollback.",
-          "file": "packages/domain/src/release/release-service.integration.test.ts",
-          "passes": true
-        },
-        "implement": {
-          "description": "Implement release and feature entities/services plus repository queries and transactional event/audit writes required by the tests.",
-          "passes": true
-        },
-        "refactor": {
-          "description": "Share project ownership guards and mutation transaction helpers, keep release calculations pure, and rerun isolated and combined service suites.",
-          "passes": true
-        }
-      },
       "verification": [
         "Create two projects with colliding release and feature slugs and verify only project-scoped collisions are rejected.",
         "Exercise archive guards with queued and active attempts.",
@@ -1373,15 +1358,15 @@
         "test": {
           "description": "Write integration tests first with fake Git/GitHub and persisted outbox/scheduler state for crash boundaries, concurrent PR creation, existing PR reuse, push/create retry, head changes, pending/pass/fail/no checks, requested changes, stale poll ordering, backoff, closed-without-merge, and merge detection.",
           "file": "apps/worker/src/github/pr-handoff-worker.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement PR handoff and reconciliation workers, persisted intents/schedules, idempotent lookup/create, current-head status mapping, monotonic observation writes, backoff, and state/event/audit effects.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Separate effect intents from observations and pure transition decisions, centralize monotonic comparison and backoff, and rerun concurrency/crash tests repeatedly.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1389,7 +1374,7 @@
         "Replay out-of-order head/status observations and confirm last-known state never regresses.",
         "Search public and internal APIs to confirm no pull-request merge or approval command exists."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "21",
@@ -1444,15 +1429,15 @@
         "test": {
           "description": "Write an API route-matrix integration test first for public login/health, authentication on every other route, CSRF on mutations, cookie login/logout, error envelopes, correlation, redacted health dependencies, and isolated fixtures.",
           "file": "apps/api/src/app.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement the Hono app/server factory, middleware, auth and health routes, dependency injection, typed response helpers, and test fixture.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Make route protection default-deny, centralize request context and safe error mapping, and rerun the complete registered-route matrix.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1460,7 +1445,7 @@
         "Run liveness/readiness tests with each dependency healthy and unhealthy.",
         "Inspect production error and health snapshots for secret or stack leakage."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "22",
@@ -1514,15 +1499,15 @@
         "test": {
           "description": "Write authenticated API integration tests first for every mutation's valid and invalid lifecycle, request schema, checksum/version, ownership, confirmation, idempotency, rollback, prompt response, and proof that no external adapter runs in request scope.",
           "file": "apps/api/src/routes/mutations.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement typed Hono mutation routes that pass actor/correlation/idempotency context into transactional domain services and return documented resource/action responses.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Consolidate route schema and command-context helpers, keep handlers thin, and rerun duplicate/race and rollback cases.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1530,7 +1515,7 @@
         "Measure approval/queue response time under seeded target scale.",
         "Instrument fake adapters and confirm HTTP mutation handlers never call worker-side effects."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "23",
@@ -1585,15 +1570,15 @@
         "test": {
           "description": "Seed isolated PostgreSQL fixtures and write failing read API tests for every projection, filter, pagination cursor, feature/job reconstruction, UTC serialization, bounded logs, SSE reconnect/gaps, REST reconciliation, and target-scale query budgets.",
           "file": "apps/api/src/routes/reads.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement optimized persisted queries and authenticated read/SSE routes with typed contracts, stable pagination, derived attention/progress, and event-ID replay.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Remove N+1 queries, add or adjust evidence-backed indexes, share projection mappers, and rerun target-scale latency plus SSE recovery tests.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1601,7 +1586,7 @@
         "Inspect query counts/plans for overview and feature detail.",
         "Disconnect SSE, create events, reconnect and compare the subsequent REST representation."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "24",
@@ -1659,15 +1644,15 @@
         "test": {
           "description": "Write component/router tests first for login/session routing, default Overview redirect, desktop/mobile navigation limits, secondary destinations, breadcrumbs/back navigation, API auth expiry, all shared view states, focus management, and status announcements.",
           "file": "apps/web/src/app/app-shell.test.tsx",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement the Vite React entrypoint, router, authenticated app shell, typed API/auth clients, responsive navigation, design tokens, and accessible shared state components.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Consolidate route metadata for navigation and breadcrumbs, remove duplicated state markup, and rerun component tests, accessibility checks, typecheck, and lint.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1675,7 +1660,7 @@
         "Navigate all primary routes by keyboard at desktop and 375-pixel widths.",
         "Expire a session and verify safe redirect plus announced feedback."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "25",
@@ -1726,15 +1711,15 @@
         "test": {
           "description": "Write page tests first for attention-first order, every category/action, summary wording/counts, attention filters, activity pagination, redacted settings health, all view states, and REST refresh after simulated SSE loss.",
           "file": "apps/web/src/features/overview/overview-page.test.tsx",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement Overview, Attention, Activity, and Settings/status pages and reusable cards against the typed read APIs.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Share portfolio query/state and card primitives without obscuring page semantics, tighten attention action labels, and rerun unit/a11y tests at narrow and wide layouts.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1742,7 +1727,7 @@
         "Verify attention precedes metrics and activity in DOM and visual order.",
         "Disconnect live updates and confirm the visible data reconciles through REST."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "26",
@@ -1797,15 +1782,15 @@
         "test": {
           "description": "Write project/release/feature component flow tests first for validation check results, save gating, duplicate pending actions, safe errors, protected edits/archive confirmations, release development progress wording, feature PLANNED creation, forms, and narrow card layouts.",
           "file": "apps/web/src/features/projects/project-flow.test.tsx",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement project, release, and feature planning pages/forms against typed mutation/read APIs with responsive accessible details and confirmation dialogs.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Share form mutation and confirmation primitives, preserve explicit entity names and error associations, and rerun keyboard/a11y and mobile component tests.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1813,7 +1798,7 @@
         "Create a release and feature and verify development progress remains zero and wording is correct.",
         "Exercise edit/archive blockers and confirmations at 375-pixel and desktop widths."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "27",
@@ -1865,15 +1850,15 @@
         "test": {
           "description": "Write task-review flow tests first for unsafe path errors, complete structured rendering, escaped optional raw JSON, checksum confirmation, stale refresh, duplicate pending prevention, lifecycle replacement/reapproval, status semantics, and 375-pixel layout.",
           "file": "apps/web/src/features/tasks/task-review-flow.test.tsx",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement feature detail, attachment, structured task/requirement review, approval confirmation, and replacement/reapproval controls using typed APIs.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Share requirement status/dependency components with progress views, preserve accessible semantics and escaped content, and rerun unit/a11y/mobile tests.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1881,7 +1866,7 @@
         "Change the backend checksum between render and approval and confirm refresh is required.",
         "Complete attachment and approval using keyboard only at 375-pixel width."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "28",
@@ -1937,15 +1922,15 @@
         "test": {
           "description": "Write job flow tests first for structured counts/phases, timing/heartbeat, stale REST reconciliation, immutable attempts, cancellation/retry confirmations and refusal, safe failures/log caps, all PR/CI/review states and links, and proof no merge action renders.",
           "file": "apps/web/src/features/jobs/job-flow.test.tsx",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement job progress/history/actions, failure/log detail, and pull-request status views within feature detail using persisted APIs and optional SSE refresh hints.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Reuse requirement cards without conflating entity labels, centralize elapsed/stale time with fake-clock tests, and rerun keyboard/a11y plus disconnect cases.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1953,7 +1938,7 @@
         "Drop SSE mid-run and confirm progress returns from REST after reconnect.",
         "Search rendered routes and client calls to confirm merge/approve controls do not exist."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "29",
@@ -2007,15 +1992,15 @@
         "test": {
           "description": "Add failing Playwright mobile/accessibility and keyboard journey tests plus local-time unit tests before hardening layouts and interactions; include horizontal-overflow, tap-target, axe, focus, status, view-state, and timezone assertions.",
           "file": "apps/web/e2e/mobile-accessibility.spec.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Adjust shared and feature UI styles/components, add status announcement and local-time primitives, and fix each tested mobile, keyboard, state-feedback, and accessibility issue without changing domain semantics.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Consolidate responsive and focus patterns, remove one-off accessibility workarounds, verify color/spacing tokens, and rerun all unit, axe, keyboard, and 375x667 journeys without retries masking flakes.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -2023,7 +2008,7 @@
         "Run automated accessibility scans and manual keyboard checks.",
         "Run timezone tests in at least UTC, a positive offset, and a negative offset."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "30",
@@ -2080,15 +2065,15 @@
         "test": {
           "description": "Write deployment configuration tests first to parse Compose/Dockerfiles and assert service separation, health dependencies, persistent volumes, explicit worker-only workspace mounts, tool checks, non-root/runtime expectations, secret handling, and absence of project mounts from web.",
           "file": "tests/deployment/compose-config.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Add Dockerfiles, Compose, safe example configuration, structured logging/metrics, health wiring, deployment/operations documentation, and a dated changelog entry.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Minimize image/runtime privileges and duplicated configuration, validate secret-safe defaults and explicit mounts, then build images and run deployment tests plus service health checks.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -2096,7 +2081,7 @@
         "Build all images and start a clean stack with disposable secrets and workspace fixtures.",
         "Inspect mounts, image history, logs, health responses, and metrics for credential or unrestricted workspace exposure."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "31",
@@ -2163,7 +2148,7 @@
         "test": {
           "description": "Write the full owner-journey E2E test first, then durability/restart, concurrency/idempotency, security-boundary, and target-scale performance tests; run them before final integration wiring and verify they expose at least one missing cross-boundary behavior.",
           "file": "tests/e2e/phase-1-owner-journey.spec.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Add only the integration wiring and cross-boundary corrections needed for the new end-to-end suites, seed/fake adapter harnesses, performance profile, and enforced per-critical-module coverage gates to pass.",
