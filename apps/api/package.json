@@ -6,6 +6,9 @@
 	"exports": {
 		".": "./src/index.ts"
 	},
+	"dependencies": {
+		"hono": "^4.6.0"
+	},
 	"scripts": {
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"test": "bun test",

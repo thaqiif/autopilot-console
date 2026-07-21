@@ -14,16 +14,14 @@ import {
 	applyWorkflowMigration,
 	createDatabaseClient,
 	createWorkspace,
+	DATABASE_URL,
 	type DatabaseClient,
+	resetSchema,
 	type Sql,
 } from "../../../../packages/database/src/index";
 import { type ApiApp, createApiApp } from "../app";
 import { bootstrapAdministrator } from "../auth/admin-bootstrap";
 import { createSessionService, type SessionService } from "../auth/session-service";
-
-const DATABASE_URL =
-	process.env.DATABASE_URL ??
-	"postgres://postgres:postgres@autopilot-console-pg:5432/autopilot_console";
 
 let client: DatabaseClient;
 let sql: Sql;
@@ -37,10 +35,7 @@ let featureId: string;
 beforeAll(async () => {
 	client = createDatabaseClient(DATABASE_URL);
 	sql = client.sql;
-	await sql.unsafe("DROP SCHEMA IF EXISTS public CASCADE");
-	await sql.unsafe("CREATE SCHEMA public");
-	await sql.unsafe("GRANT ALL ON SCHEMA public TO postgres");
-	await sql.unsafe("GRANT ALL ON SCHEMA public TO public");
+	await resetSchema(sql);
 });
 
 afterAll(async () => {

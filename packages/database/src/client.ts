@@ -12,7 +12,14 @@ export interface DatabaseClient {
 	end: () => Promise<void>;
 }
 
-export function createDatabaseClient(databaseUrl: string): DatabaseClient {
+export interface DatabaseClientOptions {
+	schema?: string;
+}
+
+export function createDatabaseClient(
+	databaseUrl: string,
+	options: DatabaseClientOptions = {},
+): DatabaseClient {
 	if (!databaseUrl || databaseUrl.trim().length === 0) {
 		throw new Error("databaseUrl is required");
 	}
@@ -22,6 +29,7 @@ export function createDatabaseClient(databaseUrl: string): DatabaseClient {
 		connect_timeout: 10,
 		// Schema is recreated between tests; prepared statements cache column types.
 		prepare: false,
+		connection: options.schema ? { search_path: options.schema } : {},
 		onnotice: () => {
 			// silence DDL notices in tests
 		},

@@ -17,7 +17,7 @@ export async function applyWorkflowMigration(sql: Sql): Promise<void> {
 
 	const tables = await sql`
 		SELECT 1 FROM information_schema.tables
-		WHERE table_schema = 'public' AND table_name = 'schema_migrations'
+		WHERE table_schema = current_schema() AND table_name = 'schema_migrations'
 	`;
 	if (tables.length > 0) {
 		const rows = await sql`

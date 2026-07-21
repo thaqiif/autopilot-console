@@ -6,6 +6,7 @@
 export {
 	createDatabaseClient,
 	type DatabaseClient,
+	type DatabaseClientOptions,
 	type Queryable,
 	type Sql,
 	type TransactionSql,
@@ -128,5 +129,16 @@ export {
 	WORKFLOW_VERSION,
 } from "./schema/workflow-migration";
 export { createDatabaseFixture, type DatabaseFixture } from "./testing/database-fixture";
+export {
+	createApiCompatibleClock,
+	createFakeClock,
+	createIsolatedTestDatabase,
+	DATABASE_URL,
+	type FakeClock,
+	type IsolatedTestDatabase,
+	mustReject,
+	resetSchema,
+	SCHEMA_RESET_SQL,
+} from "./testing/test-helpers";
 
 export const packageName = "@autopilot-console/database" as const;

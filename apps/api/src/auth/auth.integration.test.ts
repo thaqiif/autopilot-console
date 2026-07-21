@@ -9,7 +9,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import {
 	applyCoreMigration,
 	createDatabaseClient,
+	createFakeClock,
+	DATABASE_URL,
 	type DatabaseClient,
+	mustReject,
+	resetSchema,
 	type Sql,
 } from "../../../../packages/database/src/index";
 
@@ -32,46 +36,16 @@ import {
 } from "./session-cookie";
 import { createSessionService } from "./session-service";
 
-const DATABASE_URL =
-	process.env.DATABASE_URL ??
-	"postgres://postgres:postgres@autopilot-console-pg:5432/autopilot_console";
-
 const STRONG_PASSWORD = "Bootstrap-Passw0rd!";
 const WEAK_PASSWORD = "short";
 
 let client: DatabaseClient;
 let sql: Sql;
 
-/** Mutable fake clock for rate-limit and expiry tests. */
-function createClock(startMs = Date.parse("2026-07-18T00:00:00.000Z")) {
-	let now = startMs;
-	return {
-		now: () => new Date(now),
-		advanceMs: (ms: number) => {
-			now += ms;
-		},
-		set: (iso: string) => {
-			now = Date.parse(iso);
-		},
-	};
-}
-
-async function mustReject(run: () => Promise<unknown>): Promise<Error> {
-	try {
-		await run();
-	} catch (error) {
-		return error as Error;
-	}
-	throw new Error("expected operation to reject");
-}
-
 beforeAll(async () => {
 	client = createDatabaseClient(DATABASE_URL);
 	sql = client.sql;
-	await sql.unsafe("DROP SCHEMA IF EXISTS public CASCADE");
-	await sql.unsafe("CREATE SCHEMA public");
-	await sql.unsafe("GRANT ALL ON SCHEMA public TO postgres");
-	await sql.unsafe("GRANT ALL ON SCHEMA public TO public");
+	await resetSchema(sql);
 	await applyCoreMigration(sql);
 });
 
@@ -158,7 +132,7 @@ describe("administrator bootstrap", () => {
 	});
 
 	test("bootstrap password rotation updates hash and revokes existing sessions", async () => {
-		const clock = createClock();
+		const clock = createFakeClock();
 		const admin = await bootstrapAdministrator(sql, {
 			username: "admin",
 			bootstrapPassword: STRONG_PASSWORD,
@@ -206,7 +180,7 @@ describe("session service", () => {
 
 	test("successful login returns opaque raw token and stores only a hash/verifier", async () => {
 		await seededAdmin();
-		const clock = createClock();
+		const clock = createFakeClock();
 		const sessions = createSessionService({ sql, now: clock.now });
 
 		const result = await sessions.login({
@@ -251,7 +225,7 @@ describe("session service", () => {
 
 	test("resolve accepts live sessions and rejects expired or revoked ones", async () => {
 		await seededAdmin();
-		const clock = createClock();
+		const clock = createFakeClock();
 		const sessions = createSessionService({
 			sql,
 			now: clock.now,
@@ -369,7 +343,7 @@ describe("login rate limiting", () => {
 			username: "admin",
 			bootstrapPassword: STRONG_PASSWORD,
 		});
-		const clock = createClock();
+		const clock = createFakeClock();
 		const limiter = new LoginRateLimiter({
 			maxAttempts: 3,
 			windowMs: 60_000,

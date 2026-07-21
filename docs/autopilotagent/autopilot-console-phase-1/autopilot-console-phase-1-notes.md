@@ -1,27 +1,65 @@
 # autopilot-console-phase-1 Progress Notes
 
 ## Current State
-- Last verified complete in the task ledger: requirement 31 implement phase
-- Working on: requirement 31 refactor phase (in progress — PG-dependent modules remain)
-- Non-PG quality gates verified green: typecheck, lint, ~661 tests (0 failures)
-- Implemented since the audit: executable API/worker entrypoints, forward
-  migration service, production dependency probes, session restoration,
-  server-issued CSRF grants, persisted read envelopes, form mutations, and a
-  deterministic Playwright API fixture. Worker startup now composes full orphan
-  reconciliation.
-- Quality gate status (2026-07-19):
-  - lint: CLEAN (256 files, 0 errors)
-  - typecheck: GREEN (all 9 packages)
-  - Critical coverage gate: 13/19 modules ≥90% branch; 6 modules need
-    additional test coverage (domain services, process-control, retry-service)
-    or PostgreSQL for integration tests (cancellation-controller, process-tree).
-  - Unit/pure tests: 6/9 packages green (api/domain/database need PostgreSQL)
-  - tests/ directory: 118 pass, 0 fail
-  - E2E tests (Playwright): 48 pass (run separately via `playwright test`)
-- Verification on 2026-07-19: lint, typecheck, all workspace builds, all four
-  Compose image builds, and an isolated full-stack smoke run passed. The test
-  matrix passed 921 tests with 3 opt-in installed-CLI tests skipped; Playwright
-  passed 48 desktop/mobile Chromium tests without retries.
+- Last verified complete in the task ledger: requirement 21.
+- Working on: requirements 22–31 remain incomplete after the 2026-07-21
+  acceptance-level re-audit.
+- The new API, web, deployment, and release-test code is useful progress, but it
+  does not close the remaining production wiring and end-to-end proof gaps.
+- Quality gate status (2026-07-21):
+  - lint: GREEN (258 files).
+  - typecheck: GREEN (all 9 workspaces).
+  - build: GREEN (all workspaces).
+  - targeted web tests: GREEN (369 tests).
+  - Playwright: GREEN (48 desktop/mobile Chromium tests), but the suite does
+    not complete all required owner journeys and can pass while API proxy calls
+    fail.
+  - root test matrix: RED because PostgreSQL-backed suites reset the same
+    public schema concurrently; API tests observe missing sessions and migration
+    tables.
+  - critical branch coverage gate: RED; multiple domain/process-control modules
+    remain below 90 percent or are not found by the coverage run.
+  - installed Autopilot CLI contract: 3 critical-path checks remain opt-in and
+    skipped by the default suite.
+  - requirement 21 API gates: GREEN (typecheck, 122 tests, lint).
+
+## Files Modified (req 21)
+- apps/api/src/app.integration.test.ts — added exact public-route, invalid and
+  revoked session, same-origin mutation, login correlation, production worker
+  capacity, and concurrent isolated-schema coverage.
+- apps/api/src/app.ts — wired trusted-origin CSRF options and simplified health
+  service construction.
+- apps/api/src/middleware/authentication.ts — changed the public boundary from
+  prefix matching to an exact method-and-path allowlist.
+- apps/api/src/middleware/csrf.ts — rejects cross-origin browser mutations,
+  including login, before CSRF exemptions are evaluated.
+- apps/api/src/routes/auth.ts — preserves correlation IDs on login failures and
+  reuses the shared session-cookie parser.
+- apps/api/src/main.ts — reports worker heartbeat, capacity, active jobs, and
+  available slots through redacted production readiness probes.
+- packages/database/src/{client.ts,index.ts,schema/*,testing/test-helpers.ts} —
+  added unique-schema test clients and made migration detection schema-aware.
+
+## 2026-07-21 Acceptance Re-audit
+
+- Requirements 21–31 and every associated TDD stage remain `passes: false`.
+- Requirement 21 lacks a complete production-route protection matrix, origin
+  validation, complete dependency health, and isolated database fixtures.
+- Requirement 22 lacks stable cancellation/CRUD idempotency, running-process
+  cancellation routing, task invalidate/replace APIs, and target-scale valid
+  queue latency proof.
+- Requirement 23 lacks complete attention/detail projections and pagination;
+  SSE gap/reconciliation proof is incomplete.
+- Requirements 24–29 still have API/UI contract gaps, incomplete view-state and
+  SSE handling, no validate-before-save project flow, incorrect task invalidation
+  and confirmation context, incomplete job/PR integration, and presence/width
+  checks in place of complete mobile and keyboard journeys.
+- Requirement 30 still has unwired runtime logging/metrics, diagnostic retention,
+  agent-CLI validation, worker capacity health, production PR lifecycle work,
+  and running cancellation.
+- Requirement 31 does not run the full development-to-merge owner journey,
+  required restart/concurrency/security cases, or a green 90-percent critical
+  coverage and aggregate release matrix.
 
 ## 2026-07-19 Codebase Audit
 
@@ -86,6 +124,8 @@
   Attention, Activity, and Settings pages (47 component tests green at the time)
 - [2026-07-19] Integration review found response-contract and runtime wiring
   gaps; requirements 21–31 were returned to incomplete status
+- [2026-07-21] Completed requirement 21 after a fresh RED/GREEN/refactor cycle;
+  API typecheck, all 122 API tests, and API lint are green.
 
 ## Requirement 31 history (continued)
 
@@ -107,6 +147,15 @@
 - Commit: 5c0822a test: add comprehensive feature-service integration tests
 
 ## Progress
+
+### Requirement 21: Hono API application boundary
+- Started: 2026-07-21
+- Completed: 2026-07-21
+- TDD: RED confirmed for missing production health export and isolated database
+  helper; GREEN and scoped simplifier refactor completed.
+- Verification: API typecheck green; 122 tests green; API lint green.
+- Files Changed: API app/auth/health middleware and isolated PostgreSQL test
+  infrastructure listed above.
 
 ### Requirement 25: Build global Overview, full Attention, Activity, and Settings/status pages
 - Component implementation recorded: 2026-07-18

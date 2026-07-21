@@ -4,6 +4,7 @@
  */
 export const packageName = "@autopilot-console/api" as const;
 
+export { type ApiApp, type ApiAppOptions, createApiApp } from "./app";
 export { bootstrapAdministrator } from "./auth/admin-bootstrap";
 export {
 	createCsrfToken,
@@ -28,3 +29,11 @@ export {
 	type SessionService,
 	type SessionServiceOptions,
 } from "./auth/session-service";
+export {
+	createHealthService,
+	type HealthReport,
+	type HealthService,
+} from "./health/health-service";
+export { createHealthRoutes } from "./routes/health";
+export { type CsrfProtector, createCsrfProtector } from "./security/csrf-protector";
+export { createServer, type ServerHandle } from "./server";
