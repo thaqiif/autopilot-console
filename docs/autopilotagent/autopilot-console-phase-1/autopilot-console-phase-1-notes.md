@@ -184,6 +184,7 @@
   simplifier refactor completed.
 - Verification: 127 API tests and 14 task-domain tests green; API/domain
   typecheck and lint green; diff check green.
+- Commit: cc94b26 feat(api): complete idempotent mutation lifecycle (req 22)
 - Files Changed: mutation idempotency boundary, project/task/job/PR routes,
   mutation integration coverage, and task approval domain service listed above.
 
