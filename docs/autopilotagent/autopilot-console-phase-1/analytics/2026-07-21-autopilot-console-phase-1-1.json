@@ -17,7 +17,7 @@
           "type": "build_error",
           "message": "Configured API typecheck filter matched no package.",
           "command": "bun run --filter api typecheck",
-          "resolution": "Use the package's direct workspace command, bun --cwd apps/api run typecheck."
+          "resolution": "Use the package's direct workspace command, bun run --cwd apps/api typecheck."
         },
         {
           "attempt": 1,
