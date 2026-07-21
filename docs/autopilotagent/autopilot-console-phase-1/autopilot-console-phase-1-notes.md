@@ -154,6 +154,8 @@
 - TDD: RED confirmed for missing production health export and isolated database
   helper; GREEN and scoped simplifier refactor completed.
 - Verification: API typecheck green; 122 tests green; API lint green.
+- Commit: e6666bd feat(api): harden authenticated boundary and isolated fixtures
+  (req 21)
 - Files Changed: API app/auth/health middleware and isolated PostgreSQL test
   infrastructure listed above.
 
