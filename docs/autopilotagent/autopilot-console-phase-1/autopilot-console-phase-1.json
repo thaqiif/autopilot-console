@@ -1499,15 +1499,15 @@
         "test": {
           "description": "Write authenticated API integration tests first for every mutation's valid and invalid lifecycle, request schema, checksum/version, ownership, confirmation, idempotency, rollback, prompt response, and proof that no external adapter runs in request scope.",
           "file": "apps/api/src/routes/mutations.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement typed Hono mutation routes that pass actor/correlation/idempotency context into transactional domain services and return documented resource/action responses.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Consolidate route schema and command-context helpers, keep handlers thin, and rerun duplicate/race and rollback cases.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1515,7 +1515,7 @@
         "Measure approval/queue response time under seeded target scale.",
         "Instrument fake adapters and confirm HTTP mutation handlers never call worker-side effects."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "23",

@@ -15,6 +15,7 @@ import type { Queryable } from "../../../../packages/database/src/client";
 import { getWorkspace } from "../../../../packages/database/src/index";
 import type { ProjectService } from "../../../../packages/domain/src/index";
 import { createNormalizedError } from "../../../../packages/shared/src/index";
+import { createMutationIdempotency } from "../mutations/idempotency";
 
 export interface ProjectRoutesOptions {
 	projectService: ProjectService;
@@ -25,6 +26,46 @@ export interface ProjectRoutesOptions {
 export function createProjectRoutes(options: ProjectRoutesOptions): Hono {
 	const app = new Hono();
 	const { projectService, sql } = options;
+	const idempotency = createMutationIdempotency(sql);
+
+	app.post("/api/projects/validate", async (c) => {
+		const correlationId = c.get("correlationId") ?? "";
+		let body: Record<string, unknown>;
+		try {
+			body = await c.req.json();
+		} catch {
+			throw createNormalizedError({
+				code: "VALIDATION_FAILED",
+				message: "Request body must be JSON.",
+				httpStatus: 400,
+				correlationId,
+			});
+		}
+		const name = typeof body.name === "string" ? body.name.trim() : "";
+		const slug = typeof body.slug === "string" ? body.slug.trim() : "";
+		const githubOwner = typeof body.githubOwner === "string" ? body.githubOwner.trim() : "";
+		const githubRepo = typeof body.githubRepo === "string" ? body.githubRepo.trim() : "";
+		const workspacePath = typeof body.workspacePath === "string" ? body.workspacePath.trim() : "";
+		const developmentBranch =
+			typeof body.developmentBranch === "string" ? body.developmentBranch.trim() : "";
+		if (!name || !slug || !githubOwner || !githubRepo || !workspacePath || !developmentBranch) {
+			throw createNormalizedError({
+				code: "VALIDATION_FAILED",
+				message: "GitHub repository, workspace path, and development branch are required.",
+				httpStatus: 400,
+				correlationId,
+			});
+		}
+		const validation = await projectService.validateProject({
+			name,
+			slug,
+			githubOwner,
+			githubRepo,
+			workspacePath,
+			developmentBranch,
+		});
+		return c.json({ ok: true as const, data: validation }, 200);
+	});
 
 	app.post("/api/projects", async (c) => {
 		const correlationId = c.get("correlationId") ?? "";
@@ -51,6 +92,12 @@ export function createProjectRoutes(options: ProjectRoutesOptions): Hono {
 		const developmentBranch =
 			typeof body.developmentBranch === "string" ? body.developmentBranch.trim() : "";
 		const description = typeof body.description === "string" ? body.description : undefined;
+		const operationKey =
+			typeof body.operationKey === "string"
+				? body.operationKey.trim()
+				: typeof body.idempotencyKey === "string"
+					? body.idempotencyKey.trim()
+					: undefined;
 
 		const workspace = await getWorkspace(sql);
 		if (!workspace) {
@@ -108,46 +155,54 @@ export function createProjectRoutes(options: ProjectRoutesOptions): Hono {
 			});
 		}
 
-		const result = await projectService.createProject({
-			name,
-			slug,
-			githubOwner,
-			githubRepo,
-			workspacePath,
-			developmentBranch,
-			description,
-			workspaceId,
-			actor: {
-				actorType: "administrator",
-				actorId: adminId,
-				actorDisplay: adminUsername,
-				correlationId,
+		const mutation = await idempotency.execute({
+			operationKey,
+			namespace: "project.create",
+			correlationId,
+			run: async () => {
+				const result = await projectService.createProject({
+					name,
+					slug,
+					githubOwner,
+					githubRepo,
+					workspacePath,
+					developmentBranch,
+					description,
+					workspaceId,
+					actor: {
+						actorType: "administrator",
+						actorId: adminId,
+						actorDisplay: adminUsername,
+						correlationId,
+					},
+				});
+				if (!result.ok) {
+					const code =
+						result.reason === "UNIQUENESS_VIOLATION"
+							? "CONFLICT"
+							: result.reason === "VALIDATION_FAILED"
+								? "VALIDATION_FAILED"
+								: "PRECONDITION_FAILED";
+					const httpStatus =
+						result.reason === "UNIQUENESS_VIOLATION"
+							? 409
+							: result.reason === "VALIDATION_FAILED"
+								? 400
+								: 409;
+					throw createNormalizedError({
+						code,
+						message: result.message,
+						httpStatus,
+						correlationId,
+						details: result.validation ? { validation: result.validation } : undefined,
+					});
+				}
+				return result.project;
 			},
+			scope: (project) => ({ projectId: project.id }),
 		});
 
-		if (!result.ok) {
-			const code =
-				result.reason === "UNIQUENESS_VIOLATION"
-					? "CONFLICT"
-					: result.reason === "VALIDATION_FAILED"
-						? "VALIDATION_FAILED"
-						: "PRECONDITION_FAILED";
-			const httpStatus =
-				result.reason === "UNIQUENESS_VIOLATION"
-					? 409
-					: result.reason === "VALIDATION_FAILED"
-						? 400
-						: 409;
-			throw createNormalizedError({
-				code,
-				message: result.message,
-				httpStatus,
-				correlationId,
-				details: result.validation ? { validation: result.validation } : undefined,
-			});
-		}
-
-		return c.json({ ok: true as const, data: result.project }, 201);
+		return c.json({ ok: true as const, data: mutation.data }, 201);
 	});
 
 	app.put("/api/projects/:id", async (c) => {
@@ -233,18 +288,11 @@ export function createProjectRoutes(options: ProjectRoutesOptions): Hono {
 		});
 
 		if (!result.ok) {
-			const code =
-				result.reason === "NOT_FOUND"
-					? "NOT_FOUND"
-					: result.reason === "ALREADY_ARCHIVED"
-						? "CONFLICT"
-						: "CONFLICT";
-			const httpStatus =
-				result.reason === "NOT_FOUND" ? 404 : result.reason === "ALREADY_ARCHIVED" ? 409 : 409;
+			const notFound = result.reason === "NOT_FOUND";
 			throw createNormalizedError({
-				code,
+				code: notFound ? "NOT_FOUND" : "CONFLICT",
 				message: result.message,
-				httpStatus,
+				httpStatus: notFound ? 404 : 409,
 				correlationId,
 			});
 		}

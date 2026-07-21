@@ -120,7 +120,13 @@ export function createApiApp(options: ApiAppOptions): ApiApp {
 		);
 		app.route("/", createReleaseRoutes({ releaseService: adapters.releaseService }));
 		app.route("/", createFeatureRoutes({ featureService: adapters.featureService }));
-		app.route("/", createTaskArtifactRoutes({ taskApprovalService: adapters.taskApprovalService }));
+		app.route(
+			"/",
+			createTaskArtifactRoutes({
+				taskApprovalService: adapters.taskApprovalService,
+				sql: adapters.sql,
+			}),
+		);
 		app.route(
 			"/",
 			createJobActionRoutes({

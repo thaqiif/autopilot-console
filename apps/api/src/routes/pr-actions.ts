@@ -55,12 +55,21 @@ export function createPrActionRoutes(options: PrActionRoutesOptions): Hono {
 		}
 
 		const attemptId = typeof body.attemptId === "string" ? body.attemptId.trim() : "";
+		const projectId = typeof body.projectId === "string" ? body.projectId.trim() : "";
+		const confirmedFeatureId = typeof body.featureId === "string" ? body.featureId.trim() : "";
+		const operationKey = typeof body.operationKey === "string" ? body.operationKey.trim() : "";
 		const confirmation = typeof body.confirmation === "string" ? body.confirmation.trim() : "";
 
-		if (!attemptId) {
+		if (
+			!attemptId ||
+			!UUID_RE.test(projectId) ||
+			confirmedFeatureId !== featureId ||
+			!operationKey
+		) {
 			throw createNormalizedError({
 				code: "VALIDATION_FAILED",
-				message: "attemptId is required.",
+				message:
+					"attemptId, operationKey, and exact projectId/featureId confirmation are required.",
 				httpStatus: 400,
 				correlationId,
 			});
@@ -75,7 +84,6 @@ export function createPrActionRoutes(options: PrActionRoutesOptions): Hono {
 			});
 		}
 
-		const operationKey = `pr-retry:${featureId}:${attemptId}`;
 		const data = await withTransaction(sql, async (tx) => {
 			const [feature] = await tx`
 				SELECT id, project_id, state, row_version FROM features
@@ -86,6 +94,14 @@ export function createPrActionRoutes(options: PrActionRoutesOptions): Hono {
 					code: "NOT_FOUND",
 					message: "Feature not found.",
 					httpStatus: 404,
+					correlationId,
+				});
+			}
+			if (feature.project_id !== projectId) {
+				throw createNormalizedError({
+					code: "VALIDATION_FAILED",
+					message: "Confirmed project does not own this feature.",
+					httpStatus: 400,
 					correlationId,
 				});
 			}
@@ -150,7 +166,6 @@ export function createPrActionRoutes(options: PrActionRoutesOptions): Hono {
 			}
 
 			const result = { featureId, attemptId, newState: applied.nextState };
-			const projectId = feature.project_id as string;
 			await createOutboxIntent(tx, {
 				projectId,
 				featureId,

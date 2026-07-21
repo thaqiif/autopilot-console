@@ -16,10 +16,9 @@ import type { AutopilotRunner } from "../../../../packages/autopilot/src/index";
 import {
 	applyCoreMigration,
 	applyWorkflowMigration,
-	createDatabaseClient,
+	createIsolatedTestDatabase,
 	DATABASE_URL,
 	type DatabaseClient,
-	resetSchema,
 	type Sql,
 } from "../../../../packages/database/src/index";
 import type { GitGateway } from "../../../../packages/git/src/index";
@@ -32,6 +31,10 @@ import { type ApiTestHarness, type Clock, createApiTestHarness } from "../testin
 
 const ADMIN_USERNAME = "owner";
 const ADMIN_PASSWORD = "Bootstrap-Passw0rd!";
+const PROJECT_ID = "00000000-0000-4000-8000-000000000001";
+const RELEASE_ID = "00000000-0000-4000-8000-000000000002";
+const FEATURE_ID = "00000000-0000-4000-8000-000000000003";
+const APPROVAL_ID = "00000000-0000-4000-8000-000000000004";
 
 let client: DatabaseClient;
 let sql: Sql;
@@ -43,6 +46,12 @@ let clock: Clock;
 let gitPreflightCalls = 0;
 let githubCalls = 0;
 let autopilotCalls = 0;
+let projectCreateCalls = 0;
+let projectValidationCalls = 0;
+let cancellationCalls = 0;
+let approvalInvalidationCalls = 0;
+let taskReplacementCalls = 0;
+let lastApprovalInput: Record<string, unknown> | undefined;
 
 function makeGatewayFakes(): {
 	git: Partial<GitGateway>;
@@ -100,11 +109,19 @@ let _gatewayFakes = makeGatewayFakes();
  * deterministic results for the scenarios tested in the mutation suite.
  */
 function buildDomainAdapters(): DomainAdapters {
+	projectCreateCalls = 0;
+	projectValidationCalls = 0;
+	cancellationCalls = 0;
+	approvalInvalidationCalls = 0;
+	taskReplacementCalls = 0;
+	lastApprovalInput = undefined;
 	const projectService = {
 		async validateProject() {
+			projectValidationCalls++;
 			return { ok: true, canonicalPath: "/srv/repos/p", checks: [] };
 		},
 		async createProject(input: { name: string; slug: string }) {
+			projectCreateCalls++;
 			if (!input.name || !input.slug) {
 				return {
 					ok: false as const,
@@ -114,7 +131,7 @@ function buildDomainAdapters(): DomainAdapters {
 			}
 			return {
 				ok: true as const,
-				project: { id: "proj-1", name: input.name, slug: input.slug, status: "active" },
+				project: { id: PROJECT_ID, name: input.name, slug: input.slug, status: "active" },
 				validation: { ok: true, canonicalPath: "/srv/repos/p", checks: [] },
 			};
 		},
@@ -261,6 +278,7 @@ function buildDomainAdapters(): DomainAdapters {
 			return { ok: true as const, feature: { id: input.featureId, state: "PLANNED" } };
 		},
 		async approveAndQueue(input: { displayedChecksum: string; operationKey: string }) {
+			lastApprovalInput = input as unknown as Record<string, unknown>;
 			if (!input.displayedChecksum) {
 				return {
 					ok: false as const,
@@ -276,8 +294,23 @@ function buildDomainAdapters(): DomainAdapters {
 				idempotent: false,
 			};
 		},
-		async invalidateApproval() {
-			return { ok: false as const, reason: "NOT_FOUND" as const, message: "Not found" };
+		async invalidateApproval(input: Record<string, unknown>) {
+			approvalInvalidationCalls++;
+			return {
+				ok: true as const,
+				approval: { id: input.approvalId, invalidatedAt: "2026-07-21T00:00:00.000Z" },
+			};
+		},
+		async replaceTask(input: Record<string, unknown>) {
+			taskReplacementCalls++;
+			return {
+				ok: true as const,
+				feature: { id: input.featureId, state: "TASKS_REVIEW" },
+				summary: { requirements: [] },
+				checksum: "replacement-checksum",
+				invalidatedApprovalId: input.approvalId,
+				idempotent: false,
+			};
 		},
 	};
 
@@ -286,11 +319,11 @@ function buildDomainAdapters(): DomainAdapters {
 		projectService: projectService as DomainAdapters["projectService"],
 		releaseService: releaseService as DomainAdapters["releaseService"],
 		featureService: featureService as DomainAdapters["featureService"],
-		taskApprovalService: taskApprovalService as DomainAdapters["taskApprovalService"],
-		cancelHandler: async (_attempt, _feature, _reason, _operationId) => ({
-			kind: "cancelled",
-			attemptId: _attempt.id,
-		}),
+		taskApprovalService: taskApprovalService as unknown as DomainAdapters["taskApprovalService"],
+		cancelHandler: async (_attempt, _feature, _reason, _operationId) => {
+			cancellationCalls++;
+			return { kind: "cancelled", attemptId: _attempt.id };
+		},
 		retryHandler: async (_req) => ({
 			kind: "retried",
 			attempt: undefined,
@@ -323,12 +356,54 @@ async function authed(): Promise<{ token: string; csrf: string }> {
 }
 
 beforeAll(async () => {
-	client = createDatabaseClient(DATABASE_URL);
+	client = await createIsolatedTestDatabase(DATABASE_URL);
 	sql = client.sql;
-	await resetSchema(sql);
 	await applyCoreMigration(sql);
 	await applyWorkflowMigration(sql);
 });
+
+async function seedProjectAttempt(status: "QUEUED" | "RUNNING" = "RUNNING") {
+	const [admin] = await sql`SELECT id FROM admin_accounts LIMIT 1`;
+	await sql`INSERT INTO workspaces (name) VALUES ('default')`;
+	await sql`
+		INSERT INTO projects (
+			id, workspace_id, name, slug, github_owner, github_repo,
+			canonical_path, development_branch
+		) VALUES (
+			${PROJECT_ID}, (SELECT id FROM workspaces LIMIT 1), 'Project', 'project',
+			'owner', 'repo', '/projects/repo', 'main'
+		)
+	`;
+	await sql`
+		INSERT INTO releases (id, project_id, name, version)
+		VALUES (${RELEASE_ID}, ${PROJECT_ID}, 'Release', '1.0.0')
+	`;
+	await sql`
+		INSERT INTO features (id, project_id, release_id, slug, title, state, branch_name)
+		VALUES (
+			${FEATURE_ID}, ${PROJECT_ID}, ${RELEASE_ID}, 'feature', 'Feature',
+			${status === "RUNNING" ? "DEVELOPING" : "QUEUED"}, 'feature/feature'
+		)
+	`;
+	await sql`
+		INSERT INTO task_approvals (
+			id, project_id, feature_id, relative_task_path, checksum,
+			schema_compatibility_version, requirements_snapshot, approved_by_admin_id, approved_at
+		) VALUES (
+			${APPROVAL_ID}, ${PROJECT_ID}, ${FEATURE_ID}, 'tasks/feature.json', 'checksum',
+			'1', '[]', ${admin?.id}, now()
+		)
+	`;
+	const [attempt] = await sql`
+		INSERT INTO development_job_attempts (
+			project_id, feature_id, task_approval_id, branch_name, operation_key, status
+		) VALUES (
+			${PROJECT_ID}, ${FEATURE_ID}, ${APPROVAL_ID}, 'feature/feature',
+			'develop-seeded', ${status}
+		) RETURNING id
+	`;
+	return { attemptId: attempt?.id as string };
+}
 
 afterAll(async () => {
 	await client.end();
@@ -385,6 +460,25 @@ describe("route protection", () => {
 });
 
 describe("project mutations", () => {
+	test("validates project configuration without creating a project", async () => {
+		const { token, csrf } = await authed();
+		const res = await call("POST", "/api/projects/validate", {
+			token,
+			csrf,
+			json: {
+				name: "Project",
+				slug: "project",
+				githubOwner: "owner",
+				githubRepo: "repo",
+				workspacePath: "/srv/repos/p",
+				developmentBranch: "main",
+			},
+		});
+		expect(res.status).toBe(200);
+		expect(projectValidationCalls).toBe(1);
+		expect(projectCreateCalls).toBe(0);
+	});
+
 	test("create project requires CSRF and rejects unsafe path", async () => {
 		const { token } = await authed();
 		const noCsrf = await call("POST", "/api/projects", {
@@ -426,6 +520,7 @@ describe("project mutations", () => {
 
 	test("duplicate create with same idempotency key returns original outcome", async () => {
 		const { token, csrf } = await authed();
+		await seedProjectAttempt("QUEUED");
 		const body = {
 			name: "P",
 			slug: "p",
@@ -437,8 +532,15 @@ describe("project mutations", () => {
 		};
 		const first = await call("POST", "/api/projects", { token, csrf, json: body });
 		const second = await call("POST", "/api/projects", { token, csrf, json: body });
-		// Both must share the same outcome code; idempotent.
+		expect(first.status).toBe(201);
 		expect(second.status).toBe(first.status);
+		expect(projectCreateCalls).toBe(1);
+		const [idempotency] = await sql`
+			SELECT count(*)::int AS count
+			FROM idempotency_records
+			WHERE operation_key = 'dup-project-1'
+		`;
+		expect(idempotency?.count).toBe(1);
 	});
 });
 
@@ -465,6 +567,63 @@ describe("release and feature mutations", () => {
 });
 
 describe("task approval lifecycle", () => {
+	test("invalidates an approval only with exact project and feature confirmation", async () => {
+		const { token, csrf } = await authed();
+		await seedProjectAttempt("QUEUED");
+		const request = () =>
+			call("POST", `/api/features/${FEATURE_ID}/approvals/${APPROVAL_ID}/invalidate`, {
+				token,
+				csrf,
+				json: {
+					projectId: PROJECT_ID,
+					featureId: FEATURE_ID,
+					operationKey: "invalidate-approval-1",
+					confirmation: "invalidate-task-approval",
+				},
+			});
+		const first = await request();
+		const second = await request();
+		expect(first.status).toBe(200);
+		expect(second.status).toBe(200);
+		expect(await second.json()).toEqual(await first.json());
+		expect(approvalInvalidationCalls).toBe(1);
+	});
+
+	test("replaces a task through one domain command and rejects unsafe input before mutation", async () => {
+		const { token, csrf } = await authed();
+		const unsafe = await call("PUT", `/api/features/${FEATURE_ID}/task`, {
+			token,
+			csrf,
+			json: {
+				projectId: PROJECT_ID,
+				featureId: FEATURE_ID,
+				approvalId: APPROVAL_ID,
+				relativeTaskPath: "../../etc/secret.json",
+				operationKey: "replace-task-unsafe",
+				confirmation: "replace-task",
+			},
+		});
+		expect(unsafe.status).toBe(400);
+		expect(approvalInvalidationCalls).toBe(0);
+		expect(taskReplacementCalls).toBe(0);
+
+		const valid = await call("PUT", `/api/features/${FEATURE_ID}/task`, {
+			token,
+			csrf,
+			json: {
+				projectId: PROJECT_ID,
+				featureId: FEATURE_ID,
+				approvalId: APPROVAL_ID,
+				relativeTaskPath: "tasks/replacement.json",
+				operationKey: "replace-task-1",
+				confirmation: "replace-task",
+			},
+		});
+		expect(valid.status).toBe(200);
+		expect(taskReplacementCalls).toBe(1);
+		expect(approvalInvalidationCalls).toBe(0);
+	});
+
 	test("attach task rejects unsafe traversal path", async () => {
 		const { token, csrf } = await authed();
 		const res = await call("POST", "/api/features/abc/task", {
@@ -486,13 +645,25 @@ describe("task approval lifecycle", () => {
 		expect(res.status).not.toBe(200);
 	});
 
-	test("approve and queue returns within latency and never calls adapters", async () => {
+	test("valid approve and queue returns within latency at fixture scale and never calls adapters", async () => {
 		const { token, csrf } = await authed();
+		await seedProjectAttempt("QUEUED");
+		await sql`
+			INSERT INTO development_job_attempts (
+				project_id, feature_id, task_approval_id, branch_name, operation_key, status
+			)
+			SELECT
+				${PROJECT_ID}, ${FEATURE_ID}, ${APPROVAL_ID}, 'feature/feature',
+				'completed-' || n::text, 'SUCCEEDED'
+			FROM generate_series(1, 250) AS n
+		`;
 		const start = Date.now();
-		const res = await call("POST", "/api/features/abc/approve-queue", {
+		const res = await call("POST", `/api/features/${FEATURE_ID}/approve-queue`, {
 			token,
 			csrf,
 			json: {
+				projectId: PROJECT_ID,
+				featureId: FEATURE_ID,
 				displayedChecksum: "deadbeef",
 				operationKey: "op-2",
 				confirmation: "approve-and-queue",
@@ -502,11 +673,72 @@ describe("task approval lifecycle", () => {
 		expect(gitPreflightCalls).toBe(0);
 		expect(githubCalls).toBe(0);
 		expect(autopilotCalls).toBe(0);
-		expect([400, 404, 409, 422]).toContain(res.status);
+		expect(res.status).toBe(200);
+		expect(lastApprovalInput).toMatchObject({
+			projectId: PROJECT_ID,
+			featureId: FEATURE_ID,
+		});
 	});
 });
 
 describe("job and pr actions", () => {
+	test("routes running cancellation durably and reuses a stable operation outcome", async () => {
+		const { token, csrf } = await authed();
+		const { attemptId } = await seedProjectAttempt("RUNNING");
+		const request = () =>
+			call("POST", `/api/features/${FEATURE_ID}/cancel`, {
+				token,
+				csrf,
+				json: {
+					projectId: PROJECT_ID,
+					featureId: FEATURE_ID,
+					operationKey: "cancel-running-1",
+					reason: "owner requested",
+					confirmation: "cancel-development",
+				},
+			});
+
+		const first = await request();
+		const second = await request();
+		expect(first.status).toBe(200);
+		expect(second.status).toBe(200);
+		expect(await first.json()).toEqual(await second.json());
+		expect(cancellationCalls).toBe(0);
+		const [attempt] = await sql`
+			SELECT status, cancellation_reason, cancellation_requested_at
+			FROM development_job_attempts WHERE id = ${attemptId}
+		`;
+		expect(attempt).toMatchObject({
+			status: "CANCEL_REQUESTED",
+			cancellation_reason: "owner requested",
+		});
+		expect(attempt?.cancellation_requested_at).not.toBeNull();
+		const [counts] = await sql`
+			SELECT
+				(SELECT count(*)::int FROM idempotency_records WHERE operation_key = 'cancel-running-1') AS idempotency,
+				(SELECT count(*)::int FROM activity_events WHERE feature_id = ${FEATURE_ID} AND type = 'development.cancel_requested') AS activity,
+				(SELECT count(*)::int FROM audit_events WHERE feature_id = ${FEATURE_ID} AND action = 'development.cancel_request') AS audit
+		`;
+		expect(counts).toMatchObject({ idempotency: 1, activity: 1, audit: 1 });
+	});
+
+	test("rejects cancellation when confirmed project or feature does not match the target", async () => {
+		const { token, csrf } = await authed();
+		await seedProjectAttempt("QUEUED");
+		const res = await call("POST", `/api/features/${FEATURE_ID}/cancel`, {
+			token,
+			csrf,
+			json: {
+				projectId: "00000000-0000-4000-8000-000000000099",
+				featureId: FEATURE_ID,
+				operationKey: "cancel-wrong-project",
+				confirmation: "cancel-development",
+			},
+		});
+		expect(res.status).toBe(400);
+		expect(cancellationCalls).toBe(0);
+	});
+
 	test("cancel requires feature/project confirmation", async () => {
 		const { token, csrf } = await authed();
 		const res = await call("POST", "/api/features/abc/cancel", {
@@ -565,11 +797,29 @@ describe("job and pr actions", () => {
 			) VALUES (${project?.id}, ${feature?.id}, ${approval?.id}, 'feature/feature', 'develop-1', 'SUCCEEDED')
 			RETURNING id
 		`;
+		const wrongTarget = await call("POST", `/api/features/${feature?.id}/pr-retry`, {
+			token,
+			csrf,
+			json: {
+				projectId: "00000000-0000-4000-8000-000000000099",
+				featureId: feature?.id,
+				operationKey: "pr-retry-wrong-project",
+				attemptId: attempt?.id,
+				confirmation: "retry-pr-creation",
+			},
+		});
+		expect(wrongTarget.status).toBe(400);
 		const request = () =>
 			call("POST", `/api/features/${feature?.id}/pr-retry`, {
 				token,
 				csrf,
-				json: { attemptId: attempt?.id, confirmation: "retry-pr-creation" },
+				json: {
+					projectId: project?.id,
+					featureId: feature?.id,
+					operationKey: "pr-retry-1",
+					attemptId: attempt?.id,
+					confirmation: "retry-pr-creation",
+				},
 			});
 
 		const responses = await Promise.all([request(), request()]);

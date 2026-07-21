@@ -87,6 +87,17 @@ export type InvalidateApprovalResult =
 	| { ok: true; approval: { id: string; invalidatedAt: string } }
 	| { ok: false; reason: TaskArtifactFailureReason; message: string };
 
+export type ReplaceTaskResult =
+	| {
+			ok: true;
+			feature: Feature;
+			summary: TaskSummary;
+			checksum: string;
+			invalidatedApprovalId: string;
+			idempotent: boolean;
+	  }
+	| { ok: false; reason: TaskArtifactFailureReason; message: string };
+
 export interface TaskApprovalServiceOptions {
 	sql: Queryable;
 	now?: () => Date;
@@ -103,6 +114,7 @@ export interface TaskApprovalService {
 
 	approveAndQueue(input: {
 		featureId: string;
+		projectId?: string;
 		displayedChecksum: string;
 		operationKey: string;
 		actor: ProjectActor;
@@ -110,9 +122,19 @@ export interface TaskApprovalService {
 
 	invalidateApproval(input: {
 		featureId: string;
+		projectId?: string;
 		approvalId: string;
 		actor: ProjectActor;
 	}): Promise<InvalidateApprovalResult>;
+
+	replaceTask(input: {
+		featureId: string;
+		projectId: string;
+		approvalId: string;
+		relativeTaskPath: string;
+		operationKey: string;
+		actor: ProjectActor;
+	}): Promise<ReplaceTaskResult>;
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +182,7 @@ const REATTACH_STATES = new Set([
 ]);
 
 const LEGAL_ATTACH_STATES = new Set(["PLANNED", "TASKS_REVIEW", ...REATTACH_STATES]);
+const INVALIDATE_APPROVAL_STATES = new Set(["TASKS_REVIEW", ...REATTACH_STATES]);
 
 /**
  * Validate a project-relative task path by resolving it against the project's
@@ -423,10 +446,13 @@ export function createTaskApprovalService(
 		// ------------------------------------------------------------------
 		// approveAndQueue
 		// ------------------------------------------------------------------
-		async approveAndQueue({ featureId, displayedChecksum, operationKey, actor }) {
+		async approveAndQueue({ featureId, projectId, displayedChecksum, operationKey, actor }) {
 			const featureRow = await getFeatureRow(sql, featureId);
 			if (!featureRow) {
 				return { ok: false, reason: "FEATURE_NOT_FOUND", message: "Feature not found" };
+			}
+			if (projectId !== undefined && featureRow.projectId !== projectId) {
+				return { ok: false, reason: "NOT_FOUND", message: "Feature not found in project" };
 			}
 
 			// Idempotency check — before state validation so repeat calls succeed
@@ -622,20 +648,16 @@ export function createTaskApprovalService(
 		// ------------------------------------------------------------------
 		// invalidateApproval
 		// ------------------------------------------------------------------
-		async invalidateApproval({ featureId, approvalId, actor }) {
+		async invalidateApproval({ featureId, projectId, approvalId, actor }) {
 			const featureRow = await getFeatureRow(sql, featureId);
 			if (!featureRow) {
 				return { ok: false, reason: "FEATURE_NOT_FOUND", message: "Feature not found" };
 			}
+			if (projectId !== undefined && featureRow.projectId !== projectId) {
+				return { ok: false, reason: "NOT_FOUND", message: "Feature not found in project" };
+			}
 
-			const allowedStates = new Set([
-				"DEVELOPMENT_FAILED",
-				"DEVELOPMENT_INTERRUPTED",
-				"DEVELOPMENT_CANCELLED",
-				"TASKS_REVIEW",
-			]);
-
-			if (!allowedStates.has(featureRow.state)) {
+			if (!INVALIDATE_APPROVAL_STATES.has(featureRow.state)) {
 				return {
 					ok: false,
 					reason: "ILLEGAL_STATE",
@@ -680,6 +702,153 @@ export function createTaskApprovalService(
 			});
 
 			return { ok: true, approval: result };
+		},
+
+		async replaceTask({ featureId, projectId, approvalId, relativeTaskPath, operationKey, actor }) {
+			const featureRow = await getFeatureRow(sql, featureId);
+			if (!featureRow || featureRow.projectId !== projectId) {
+				return { ok: false, reason: "FEATURE_NOT_FOUND", message: "Feature not found" };
+			}
+
+			const cachedRows = await sql`
+				SELECT result FROM idempotency_records WHERE operation_key = ${operationKey}
+			`;
+			const cached = cachedRows[0]?.result as
+				| {
+						kind?: string;
+						approvalId?: string;
+						checksum?: string;
+						summary?: TaskSummary;
+				  }
+				| undefined;
+			if (cachedRows.length > 0) {
+				if (cached?.kind !== "task.replace" || cached.approvalId !== approvalId) {
+					return {
+						ok: false,
+						reason: "VALIDATION_FAILED",
+						message: "Operation key was already used for a different mutation",
+					};
+				}
+				const current = await getFeatureRow(sql, featureId);
+				if (!current || !cached.checksum || !cached.summary) {
+					return { ok: false, reason: "NOT_FOUND", message: "Replacement result not found" };
+				}
+				return {
+					ok: true,
+					feature: mapFeature(current),
+					summary: cached.summary,
+					checksum: cached.checksum,
+					invalidatedApprovalId: approvalId,
+					idempotent: true,
+				};
+			}
+
+			if (!REATTACH_STATES.has(featureRow.state)) {
+				return {
+					ok: false,
+					reason: "ILLEGAL_STATE",
+					message: `Cannot replace task in state ${featureRow.state}`,
+				};
+			}
+
+			const project = await getProjectById(sql, projectId);
+			if (!project) return { ok: false, reason: "NOT_FOUND", message: "Project not found" };
+			const parsed = await readAndParseTaskFile(project.canonicalPath, relativeTaskPath);
+			if (!parsed.ok) return parsed;
+
+			try {
+				const transactionResult = await withTransaction(sql, async (tx) => {
+					await tx`SELECT id FROM features WHERE id = ${featureId} FOR UPDATE`;
+					const invalidatedAt = now();
+					const approvals = await tx`
+						UPDATE task_approvals
+						SET invalidated_at = ${invalidatedAt}
+						WHERE id = ${approvalId}
+							AND feature_id = ${featureId}
+							AND project_id = ${projectId}
+							AND invalidated_at IS NULL
+						RETURNING id
+					`;
+					if (approvals.length === 0) {
+						return {
+							ok: false as const,
+							reason: "NOT_FOUND" as const,
+							message: "Active approval not found",
+						};
+					}
+
+					await tx`
+						UPDATE features
+						SET state = 'TASKS_REVIEW', task_path = ${relativeTaskPath},
+							row_version = row_version + 1, updated_at = now()
+						WHERE id = ${featureId} AND project_id = ${projectId}
+					`;
+					await appendActivityEvent(tx, {
+						projectId,
+						featureId,
+						type: "feature.task_replaced",
+						summary: `Task replaced with ${relativeTaskPath}`,
+						source: "domain:task-approval-service",
+						metadata: { checksum: parsed.checksum, approvalId },
+					});
+					await appendAuditEvent(tx, {
+						actorType: actor.actorType,
+						actorId: actor.actorId,
+						action: "feature.task.replace",
+						targetType: "feature",
+						targetId: featureId,
+						projectId,
+						featureId,
+						correlationId: actor.correlationId,
+						result: "success",
+						nextValues: redactValue({ relativeTaskPath, checksum: parsed.checksum }),
+					});
+					const idempotencyResult = {
+						kind: "task.replace",
+						approvalId,
+						checksum: parsed.checksum,
+						summary: parsed.summary,
+					};
+					await createIdempotencyRecord(tx, {
+						operationKey,
+						projectId,
+						featureId,
+						result: idempotencyResult,
+					});
+					return { ok: true as const, idempotencyResult };
+				});
+
+				if (!transactionResult.ok) return transactionResult;
+				const updated = await getFeatureRow(sql, featureId);
+				if (!updated)
+					return { ok: false, reason: "FEATURE_NOT_FOUND", message: "Feature not found" };
+				return {
+					ok: true,
+					feature: mapFeature(updated),
+					summary: parsed.summary,
+					checksum: parsed.checksum,
+					invalidatedApprovalId: approvalId,
+					idempotent: false,
+				};
+			} catch (error) {
+				if (isUniqueViolation(error)) {
+					const [winner] = await sql`
+						SELECT result FROM idempotency_records WHERE operation_key = ${operationKey}
+					`;
+					const result = winner?.result as { kind?: string; approvalId?: string } | undefined;
+					if (result?.kind === "task.replace" && result.approvalId === approvalId) {
+						return this.replaceTask({
+							featureId,
+							projectId,
+							approvalId,
+							relativeTaskPath,
+							operationKey,
+							actor,
+						});
+					}
+				}
+				throw error;
+			}
 		},
 	};
 }

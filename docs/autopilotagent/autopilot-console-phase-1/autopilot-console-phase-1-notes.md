@@ -1,8 +1,8 @@
 # autopilot-console-phase-1 Progress Notes
 
 ## Current State
-- Last verified complete in the task ledger: requirement 21.
-- Working on: requirements 22–31 remain incomplete after the 2026-07-21
+- Last verified complete in the task ledger: requirement 22.
+- Working on: requirements 23–31 remain incomplete after the 2026-07-21
   acceptance-level re-audit.
 - The new API, web, deployment, and release-test code is useful progress, but it
   does not close the remaining production wiring and end-to-end proof gaps.
@@ -22,6 +22,8 @@
   - installed Autopilot CLI contract: 3 critical-path checks remain opt-in and
     skipped by the default suite.
   - requirement 21 API gates: GREEN (typecheck, 122 tests, lint).
+  - requirement 22 API/domain gates: GREEN (typecheck, 127 API tests, 14
+    task-domain tests, lint, and diff check).
 
 ## Files Modified (req 21)
 - apps/api/src/app.integration.test.ts — added exact public-route, invalid and
@@ -40,6 +42,19 @@
 - packages/database/src/{client.ts,index.ts,schema/*,testing/test-helpers.ts} —
   added unique-schema test clients and made migration detection schema-aware.
 
+## Files Modified (req 22)
+- apps/api/src/mutations/idempotency.ts — added persistent, namespace-safe
+  mutation replay with concurrent request coalescing.
+- apps/api/src/routes/{projects,task-artifacts,job-actions,pr-actions}.ts and
+  apps/api/src/app.ts — added project validation, exact target confirmation,
+  task invalidation/replacement, durable running cancellation, and stable
+  project/approval/action idempotency.
+- apps/api/src/routes/mutations.integration.test.ts — added isolated RED/GREEN
+  coverage for duplicate operations, lifecycle/ownership guards, rollback-safe
+  paths, running cancellation, and target-scale queue latency.
+- packages/domain/src/task/task-approval-service.ts — added project ownership
+  checks and transactional, idempotent task replacement.
+
 ## 2026-07-21 Acceptance Re-audit
 
 - Requirements 21–31 and every associated TDD stage remain `passes: false`.
@@ -47,7 +62,7 @@
   validation, complete dependency health, and isolated database fixtures.
 - Requirement 22 lacks stable cancellation/CRUD idempotency, running-process
   cancellation routing, task invalidate/replace APIs, and target-scale valid
-  queue latency proof.
+  queue latency proof. Resolved on 2026-07-21 by the requirement 22 cycle below.
 - Requirement 23 lacks complete attention/detail projections and pagination;
   SSE gap/reconciliation proof is incomplete.
 - Requirements 24–29 still have API/UI contract gaps, incomplete view-state and
@@ -126,6 +141,8 @@
   gaps; requirements 21–31 were returned to incomplete status
 - [2026-07-21] Completed requirement 21 after a fresh RED/GREEN/refactor cycle;
   API typecheck, all 122 API tests, and API lint are green.
+- [2026-07-21] Completed requirement 22 after RED/GREEN/refactor; all 127 API
+  tests and 14 task-domain tests pass with both package typecheck/lint gates.
 
 ## Requirement 31 history (continued)
 
@@ -158,6 +175,17 @@
   (req 21)
 - Files Changed: API app/auth/health middleware and isolated PostgreSQL test
   infrastructure listed above.
+
+### Requirement 22: Authenticated mutation API lifecycle
+- Started: 2026-07-21
+- Completed: 2026-07-21
+- TDD: RED confirmed for missing validation/idempotency, approval replacement,
+  exact action targets, and durable running cancellation; GREEN and scoped
+  simplifier refactor completed.
+- Verification: 127 API tests and 14 task-domain tests green; API/domain
+  typecheck and lint green; diff check green.
+- Files Changed: mutation idempotency boundary, project/task/job/PR routes,
+  mutation integration coverage, and task approval domain service listed above.
 
 ### Requirement 25: Build global Overview, full Attention, Activity, and Settings/status pages
 - Component implementation recorded: 2026-07-18
