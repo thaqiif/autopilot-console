@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import type { Queryable } from "../../../../packages/database/src/client";
 
 type Timer = unknown;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface EventRouteOptions {
 	sql: Queryable;
@@ -48,10 +49,14 @@ export function createEventRoutes(options: EventRouteOptions): Hono {
 			async start(controller) {
 				const initial = await readInitial(options.sql, lastEventId);
 				if (closed) return;
-				if (initial.length > 0) {
-					controller.enqueue(encoder.encode(initial.map(toFrame).join("")));
-					const last = initial[initial.length - 1];
+				let initialFrames = initial.gap ? toReconciliationFrame(lastEventId) : "";
+				if (initial.rows.length > 0) {
+					initialFrames += initial.rows.map(toFrame).join("");
+					controller.enqueue(encoder.encode(initialFrames));
+					const last = initial.rows[initial.rows.length - 1];
 					if (last) cursor = { occurredAt: last.occurred_at, id: last.id };
+				} else if (initialFrames) {
+					controller.enqueue(encoder.encode(initialFrames));
 				} else {
 					controller.enqueue(encoder.encode(": connected\n\n"));
 				}
@@ -90,13 +95,29 @@ export function createEventRoutes(options: EventRouteOptions): Hono {
 	return app;
 }
 
-async function readInitial(sql: Queryable, lastEventId: string | undefined): Promise<EventRow[]> {
-	if (lastEventId) {
+interface InitialEvents {
+	rows: EventRow[];
+	gap: boolean;
+}
+
+async function readInitial(
+	sql: Queryable,
+	lastEventId: string | undefined,
+): Promise<InitialEvents> {
+	if (lastEventId && UUID_RE.test(lastEventId)) {
 		const marker = await sql`
 			SELECT id, occurred_at FROM activity_events WHERE id = ${lastEventId} LIMIT 1
 		`;
 		const row = marker[0];
-		if (row) return readAfter(sql, { occurredAt: row.occurred_at as Date, id: row.id as string });
+		if (row) {
+			return {
+				rows: await readAfter(sql, {
+					occurredAt: row.occurred_at as Date,
+					id: row.id as string,
+				}),
+				gap: false,
+			};
+		}
 	}
 	const rows = await sql`
 		SELECT * FROM (
@@ -104,14 +125,25 @@ async function readInitial(sql: Queryable, lastEventId: string | undefined): Pro
 			FROM activity_events ORDER BY occurred_at DESC, id DESC LIMIT 50
 		) recent ORDER BY occurred_at ASC, id ASC
 	`;
-	return rows as unknown as EventRow[];
+	return {
+		rows: rows as unknown as EventRow[],
+		gap: lastEventId !== undefined,
+	};
 }
 
 async function readAfter(
 	sql: Queryable,
 	cursor: { occurredAt: Date; id: string } | null,
 ): Promise<EventRow[]> {
-	if (!cursor) return [];
+	if (!cursor) {
+		const rows = await sql`
+			SELECT id, project_id, feature_id, attempt_id, type, summary, metadata, occurred_at
+			FROM activity_events
+			ORDER BY occurred_at ASC, id ASC
+			LIMIT 100
+		`;
+		return rows as unknown as EventRow[];
+	}
 	const rows = await sql`
 		SELECT id, project_id, feature_id, attempt_id, type, summary, metadata, occurred_at
 		FROM activity_events
@@ -119,6 +151,19 @@ async function readAfter(
 		ORDER BY occurred_at ASC, id ASC LIMIT 100
 	`;
 	return rows as unknown as EventRow[];
+}
+
+function toReconciliationFrame(lastEventId: string | undefined): string {
+	return [
+		"event: reconcile",
+		`data: ${JSON.stringify({
+			reason: "event_gap",
+			lastEventId: lastEventId ?? null,
+			reload: "/api/overview",
+		})}`,
+		"",
+		"",
+	].join("\n");
 }
 
 function toFrame(row: EventRow): string {

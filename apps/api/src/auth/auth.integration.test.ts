@@ -8,12 +8,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import {
 	applyCoreMigration,
-	createDatabaseClient,
 	createFakeClock,
+	createIsolatedTestDatabase,
 	DATABASE_URL,
 	type DatabaseClient,
 	mustReject,
-	resetSchema,
 	type Sql,
 } from "../../../../packages/database/src/index";
 
@@ -43,9 +42,8 @@ let client: DatabaseClient;
 let sql: Sql;
 
 beforeAll(async () => {
-	client = createDatabaseClient(DATABASE_URL);
+	client = await createIsolatedTestDatabase(DATABASE_URL);
 	sql = client.sql;
-	await resetSchema(sql);
 	await applyCoreMigration(sql);
 });
 

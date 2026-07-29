@@ -12,11 +12,10 @@ import type { Hono } from "hono";
 import {
 	applyCoreMigration,
 	applyWorkflowMigration,
-	createDatabaseClient,
+	createIsolatedTestDatabase,
 	createWorkspace,
 	DATABASE_URL,
 	type DatabaseClient,
-	resetSchema,
 	type Sql,
 } from "../../../../packages/database/src/index";
 import { type ApiApp, createApiApp } from "../app";
@@ -33,9 +32,10 @@ let releaseId: string;
 let featureId: string;
 
 beforeAll(async () => {
-	client = createDatabaseClient(DATABASE_URL);
+	client = await createIsolatedTestDatabase(DATABASE_URL);
 	sql = client.sql;
-	await resetSchema(sql);
+	await applyCoreMigration(sql);
+	await applyWorkflowMigration(sql);
 });
 
 afterAll(async () => {
@@ -43,10 +43,6 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-	// Apply proper migrations (same as production) — idempotent after first run
-	await applyCoreMigration(sql);
-	await applyWorkflowMigration(sql);
-
 	// Clean up test data from previous test run while preserving schema
 	await sql.unsafe(`
 		TRUNCATE TABLE
@@ -132,6 +128,42 @@ beforeEach(async () => {
 	`.then((rows) => (rows[0] as { id: string }).id);
 });
 
+async function createTaskApproval(
+	checksum: string,
+	requirements: Parameters<Sql["json"]>[0] = [],
+): Promise<string> {
+	return sql`
+		INSERT INTO task_approvals
+			(project_id, feature_id, relative_task_path, checksum, schema_compatibility_version,
+			 requirements_snapshot, approved_by_admin_id, approved_at)
+		SELECT ${projectId}, ${featureId}, 'tasks/test.json', ${checksum}, '1.0',
+			${sql.json({ requirements })}, id, NOW()
+		FROM admin_accounts LIMIT 1
+		RETURNING id
+	`.then((rows) => (rows[0] as { id: string }).id);
+}
+
+async function createAttempt(
+	approvalId: string,
+	status: "QUEUED" | "RUNNING" | "FAILED" | "INTERRUPTED" = "QUEUED",
+): Promise<string> {
+	return sql`
+		INSERT INTO development_job_attempts
+			(project_id, feature_id, task_approval_id, branch_name, operation_key, status,
+			 enqueued_at)
+		VALUES (
+			${projectId},
+			${featureId},
+			${approvalId},
+			'feature/test-feature',
+			${`op-key-${crypto.randomUUID()}`},
+			${status},
+			NOW()
+		)
+		RETURNING id
+	`.then((rows) => (rows[0] as { id: string }).id);
+}
+
 describe("GET /api/overview", () => {
 	test("requires authentication", async () => {
 		const { app: noAuthApp } = createApiApp({
@@ -179,6 +211,48 @@ describe("GET /api/overview", () => {
 		expect(body.data.activeJobs).toBe(0);
 		expect(body.data.queuedJobs).toBe(0);
 		expect(body.data.failedJobs).toBe(0);
+	});
+
+	test("uses persisted release status and stale-sync failures for exact portfolio metrics", async () => {
+		await sql`UPDATE features SET state = 'DEVELOPMENT_MERGED' WHERE id = ${featureId}`;
+		await sql`
+			INSERT INTO failure_records
+				(project_id, feature_id, category, summary, recommended_action)
+			VALUES (
+				${projectId},
+				${featureId},
+				'stale_github_sync',
+				'GitHub observations are stale',
+				'Refresh GitHub status'
+			)
+		`;
+
+		const beforeMerge = await app.request("/api/overview", {
+			headers: { Cookie: sessionCookie },
+		});
+		const beforeBody = (await beforeMerge.json()) as {
+			data: {
+				attentionCount: number;
+				developmentMergedFeatures: number;
+				developmentMergedReleases: number;
+			};
+		};
+		expect(beforeBody.data).toMatchObject({
+			attentionCount: 1,
+			developmentMergedFeatures: 1,
+			developmentMergedReleases: 0,
+		});
+
+		await sql`
+			UPDATE releases SET status = 'DEVELOPMENT_MERGED' WHERE id = ${releaseId}
+		`;
+		const afterMerge = await app.request("/api/overview", {
+			headers: { Cookie: sessionCookie },
+		});
+		const afterBody = (await afterMerge.json()) as {
+			data: { developmentMergedReleases: number };
+		};
+		expect(afterBody.data.developmentMergedReleases).toBe(1);
 	});
 });
 
@@ -248,6 +322,58 @@ describe("GET /api/attention", () => {
 		};
 		const plannedItems = body.data.items.filter((item) => item.currentState === "PLANNED");
 		expect(plannedItems.length).toBe(0);
+	});
+
+	test("derives stale GitHub sync attention from persisted failures", async () => {
+		await sql`
+			INSERT INTO failure_records
+				(project_id, feature_id, category, summary, recommended_action, occurred_at)
+			VALUES (
+				${projectId},
+				${featureId},
+				'stale_github_sync',
+				'GitHub polling repeatedly failed',
+				'Refresh GitHub status',
+				'2026-07-29T20:00:00.000Z'
+			)
+		`;
+
+		const res = await app.request("/api/attention?category=stale_github_sync", {
+			headers: { Cookie: sessionCookie },
+		});
+		const body = (await res.json()) as {
+			ok: true;
+			data: { items: Array<Record<string, unknown>> };
+		};
+		expect(res.status).toBe(200);
+		expect(body.data.items).toEqual([
+			expect.objectContaining({
+				projectId,
+				releaseId,
+				featureId,
+				reason: "stale_github_sync",
+				ageBasis: "2026-07-29T20:00:00.000Z",
+				currentState: "PLANNED",
+				primaryAction: "refresh_github_status",
+			}),
+		]);
+	});
+
+	test("applies project and release filters and rejects unsupported categories", async () => {
+		await sql`UPDATE features SET state = 'TASKS_REVIEW' WHERE id = ${featureId}`;
+
+		const filtered = await app.request(
+			`/api/attention?projectId=00000000-0000-4000-8000-000000000099&releaseId=${releaseId}`,
+			{ headers: { Cookie: sessionCookie } },
+		);
+		const filteredBody = (await filtered.json()) as { data: { items: unknown[] } };
+		expect(filtered.status).toBe(200);
+		expect(filteredBody.data.items).toEqual([]);
+
+		const invalid = await app.request("/api/attention?category=not-a-category", {
+			headers: { Cookie: sessionCookie },
+		});
+		expect(invalid.status).toBe(400);
 	});
 });
 
@@ -539,6 +665,186 @@ describe("GET /api/features/:id", () => {
 		expect(body.data.attempts[0]?.branchName).toBe("feature/test-feature");
 	});
 
+	test("reconstructs mutable requirement phases, blockers, and active worker timing", async () => {
+		const requirements = [
+			{
+				id: "1",
+				description: "Completed requirement",
+				acceptance: ["done"],
+				dependsOn: [],
+				passes: true,
+				tdd: {
+					test: { passes: true },
+					implement: { passes: true },
+					refactor: { passes: true },
+				},
+			},
+			{
+				id: "2",
+				description: "Active requirement",
+				acceptance: ["in progress"],
+				dependsOn: ["1"],
+				passes: false,
+				tdd: {
+					test: { passes: true },
+					implement: { passes: false },
+					refactor: { passes: false },
+				},
+			},
+			{
+				id: "3",
+				description: "Blocked requirement",
+				acceptance: ["blocked"],
+				dependsOn: ["2"],
+				passes: false,
+				stuck: true,
+				blockedReason: "External dependency unavailable",
+				tdd: {
+					test: { passes: false },
+					implement: { passes: false },
+					refactor: { passes: false },
+				},
+			},
+		];
+		const approvalId = await createTaskApproval("progress-checksum", requirements);
+		const [worker] = await sql`
+			INSERT INTO worker_registrations
+				(worker_id, hostname, capacity, active_jobs, last_heartbeat_at)
+			VALUES ('worker-23', 'worker-host', 4, 1, '2026-07-29T20:02:00.000Z')
+			RETURNING id
+		`;
+		const attemptId = await createAttempt(approvalId, "RUNNING");
+		await sql`
+			UPDATE development_job_attempts
+			SET worker_registration_id = ${worker?.id},
+				process_pid = 2300,
+				started_at = '2026-07-29T20:00:00.000Z',
+				heartbeat_at = '2026-07-29T20:02:00.000Z'
+			WHERE id = ${attemptId}
+		`;
+		await sql`
+			INSERT INTO progress_snapshots
+				(project_id, feature_id, attempt_id, source_version, summary, requirements, created_at)
+			VALUES (
+				${projectId},
+				${featureId},
+				${attemptId},
+				7,
+				${sql.json({ activeRequirementId: "2" })},
+				${sql.json(requirements)},
+				'2026-07-29T20:02:00.000Z'
+			)
+		`;
+
+		const res = await app.request(`/api/features/${featureId}`, {
+			headers: { Cookie: sessionCookie },
+		});
+		const body = (await res.json()) as {
+			data: {
+				progress: {
+					totalRequirements: number;
+					passedRequirements: number;
+					activeRequirements: number;
+					stuckRequirements: number;
+					remainingRequirements: number;
+					activeRequirementId: string;
+					requirements: Array<Record<string, unknown>>;
+				};
+				activeAttempt: {
+					id: string;
+					worker: { workerId: string; hostname: string; capacity: number };
+					heartbeatAt: string;
+					startedAt: string;
+				};
+			};
+		};
+
+		expect(res.status).toBe(200);
+		expect(body.data.progress).toMatchObject({
+			totalRequirements: 3,
+			passedRequirements: 1,
+			activeRequirements: 1,
+			stuckRequirements: 1,
+			remainingRequirements: 1,
+			activeRequirementId: "2",
+		});
+		expect(body.data.progress.requirements[1]).toMatchObject({
+			id: "2",
+			dependsOn: ["1"],
+			blockedReason: null,
+			phases: { red: true, green: false, refactor: false },
+		});
+		expect(body.data.progress.requirements[2]).toMatchObject({
+			id: "3",
+			blockedReason: "External dependency unavailable",
+			status: "stuck",
+		});
+		expect(body.data.activeAttempt).toMatchObject({
+			id: attemptId,
+			worker: { workerId: "worker-23", hostname: "worker-host", capacity: 4 },
+			heartbeatAt: "2026-07-29T20:02:00.000Z",
+			startedAt: "2026-07-29T20:00:00.000Z",
+		});
+	});
+
+	test("exposes an authenticated job-detail projection for a persisted attempt", async () => {
+		const approvalId = await createTaskApproval("job-detail-checksum");
+		const attemptId = await createAttempt(approvalId, "QUEUED");
+
+		const res = await app.request(`/api/jobs/${attemptId}`, {
+			headers: { Cookie: sessionCookie },
+		});
+		const body = (await res.json()) as {
+			data: {
+				id: string;
+				feature: { id: string; projectId: string; releaseId: string };
+				attemptHistory: Array<{ id: string }>;
+				diagnosticLogs: unknown[];
+				failures: unknown[];
+				recentActivity: unknown[];
+			};
+		};
+
+		expect(res.status).toBe(200);
+		expect(body.data).toMatchObject({
+			id: attemptId,
+			feature: { id: featureId, projectId, releaseId },
+			attemptHistory: [{ id: attemptId }],
+			diagnosticLogs: [],
+			failures: [],
+			recentActivity: [],
+		});
+	});
+
+	test("bounds diagnostic logs to the newest 100 chunks", async () => {
+		const approvalId = await createTaskApproval("bounded-log-checksum");
+		const attemptId = await createAttempt(approvalId);
+		for (let sequence = 1; sequence <= 101; sequence += 1) {
+			await sql`
+				INSERT INTO diagnostic_log_chunks
+					(project_id, attempt_id, sequence, stream, body, created_at)
+				VALUES (
+					${projectId},
+					${attemptId},
+					${sequence},
+					'stdout',
+					${`line-${sequence}`},
+					${new Date(Date.UTC(2026, 6, 29, 20, 0, sequence))}
+				)
+			`;
+		}
+
+		const res = await app.request(`/api/features/${featureId}`, {
+			headers: { Cookie: sessionCookie },
+		});
+		const body = (await res.json()) as {
+			data: { diagnosticLogs: Array<{ sequence: number; body: string }> };
+		};
+		expect(body.data.diagnosticLogs).toHaveLength(100);
+		expect(body.data.diagnosticLogs[0]).toMatchObject({ sequence: 101, body: "line-101" });
+		expect(body.data.diagnosticLogs.at(-1)).toMatchObject({ sequence: 2, body: "line-2" });
+	});
+
 	test("returns 404 for non-existent feature", async () => {
 		const res = await app.request("/api/features/00000000-0000-0000-0000-000000000000", {
 			headers: { Cookie: sessionCookie },
@@ -569,6 +875,7 @@ describe("GET /api/events (SSE)", () => {
 
 		expect(res.status).toBe(200);
 		expect(res.headers.get("Content-Type")).toContain("text/event-stream");
+		await res.body?.cancel();
 	});
 
 	test("supports reconnect from Last-Event-ID header", async () => {
@@ -581,5 +888,92 @@ describe("GET /api/events (SSE)", () => {
 		});
 
 		expect(res.status).toBe(200);
+		await res.body?.cancel();
+	});
+
+	test("signals an explicit reconciliation gap when Last-Event-ID is no longer available", async () => {
+		await sql`
+			INSERT INTO activity_events
+				(project_id, feature_id, type, summary, source, occurred_at)
+			VALUES (
+				${projectId},
+				${featureId},
+				'feature.updated',
+				'Feature updated',
+				'test',
+				'2026-07-29T20:00:00.000Z'
+			)
+		`;
+
+		const res = await app.request("/api/events", {
+			headers: {
+				Cookie: sessionCookie,
+				Accept: "text/event-stream",
+				"Last-Event-ID": "00000000-0000-4000-8000-000000000099",
+			},
+		});
+		const reader = res.body?.getReader();
+		const chunk = await reader?.read();
+		const text = new TextDecoder().decode(chunk?.value);
+		await reader?.cancel();
+
+		expect(text).toContain("event: reconcile");
+		expect(text).toContain('"reason":"event_gap"');
+		expect(text).toContain('"reload":"/api/overview"');
+	});
+
+	test("replays persisted events and REST reconstructs the identical authoritative state", async () => {
+		const [marker] = await sql`
+			INSERT INTO activity_events
+				(project_id, feature_id, type, summary, source, occurred_at)
+			VALUES (
+				${projectId},
+				${featureId},
+				'feature.created',
+				'Feature created',
+				'test',
+				'2026-07-29T20:00:00.000Z'
+			)
+			RETURNING id
+		`;
+		await sql`
+			UPDATE features
+			SET state = 'TASKS_REVIEW', updated_at = '2026-07-29T20:01:00.000Z'
+			WHERE id = ${featureId}
+		`;
+		const [changed] = await sql`
+			INSERT INTO activity_events
+				(project_id, feature_id, type, summary, source, metadata, occurred_at)
+			VALUES (
+				${projectId},
+				${featureId},
+				'feature.state_changed',
+				'Feature moved to task review',
+				'test',
+				${sql.json({ state: "TASKS_REVIEW" })},
+				'2026-07-29T20:01:00.000Z'
+			)
+			RETURNING id
+		`;
+
+		const stream = await app.request("/api/events", {
+			headers: {
+				Cookie: sessionCookie,
+				Accept: "text/event-stream",
+				"Last-Event-ID": String(marker?.id),
+			},
+		});
+		const reader = stream.body?.getReader();
+		const chunk = await reader?.read();
+		const text = new TextDecoder().decode(chunk?.value);
+		await reader?.cancel();
+		expect(text).toContain(`id: ${String(changed?.id)}`);
+		expect(text).toContain('"state":"TASKS_REVIEW"');
+
+		const rest = await app.request(`/api/features/${featureId}`, {
+			headers: { Cookie: sessionCookie },
+		});
+		const restBody = (await rest.json()) as { data: { state: string } };
+		expect(restBody.data.state).toBe("TASKS_REVIEW");
 	});
 });

@@ -7,6 +7,45 @@
 
 import type { Queryable } from "../../../../packages/database/src/client";
 
+export interface RequirementProgress {
+	id: string;
+	description: string;
+	acceptance: string[];
+	dependsOn: string[];
+	blockedReason: string | null;
+	status: "not_started" | "in_progress" | "passed" | "stuck" | "invalid";
+	passes: boolean;
+	stuck: boolean;
+	invalidTest: boolean;
+	phases: {
+		red: boolean;
+		green: boolean;
+		refactor: boolean;
+	};
+}
+
+export interface FeatureAttempt {
+	id: string;
+	status: string;
+	branchName: string;
+	predecessorAttemptId: string | null;
+	workerRegistrationId: string | null;
+	worker: {
+		workerId: string;
+		hostname: string;
+		capacity: number;
+		activeJobs: number;
+		lastHeartbeatAt: Date;
+	} | null;
+	processPid: number | null;
+	heartbeatAt: Date | null;
+	enqueuedAt: Date;
+	startedAt: Date | null;
+	endedAt: Date | null;
+	exitCode: number | null;
+	structuredResult: unknown | null;
+}
+
 export interface FeatureDetail {
 	id: string;
 	projectId: string;
@@ -34,21 +73,12 @@ export interface FeatureDetail {
 		stuckRequirements: number;
 		invalidRequirements: number;
 		remainingRequirements: number;
+		activeRequirementId: string | null;
+		requirements: RequirementProgress[];
 		lastUpdatedAt: Date | null;
 	} | null;
-	attempts: Array<{
-		id: string;
-		status: string;
-		branchName: string;
-		workerRegistrationId: string | null;
-		processPid: number | null;
-		heartbeatAt: Date | null;
-		enqueuedAt: Date;
-		startedAt: Date | null;
-		endedAt: Date | null;
-		exitCode: number | null;
-		structuredResult: unknown | null;
-	}>;
+	activeAttempt: FeatureAttempt | null;
+	attempts: FeatureAttempt[];
 	failures: Array<{
 		id: string;
 		attemptId: string | null;
@@ -117,11 +147,28 @@ export async function queryFeatureDetail(
 
 	// Get all attempts
 	const attempts = await sql`
-		SELECT id, status, branch_name, worker_registration_id, process_pid,
-			heartbeat_at, enqueued_at, started_at, ended_at, exit_code, structured_result
-		FROM development_job_attempts
-		WHERE feature_id = ${featureId}
-		ORDER BY enqueued_at DESC
+		SELECT
+			a.id,
+			a.status,
+			a.branch_name,
+			a.predecessor_attempt_id,
+			a.worker_registration_id,
+			a.process_pid,
+			a.heartbeat_at,
+			a.enqueued_at,
+			a.started_at,
+			a.ended_at,
+			a.exit_code,
+			a.structured_result,
+			w.worker_id,
+			w.hostname AS worker_hostname,
+			w.capacity AS worker_capacity,
+			w.active_jobs AS worker_active_jobs,
+			w.last_heartbeat_at AS worker_last_heartbeat_at
+		FROM development_job_attempts a
+		LEFT JOIN worker_registrations w ON w.id = a.worker_registration_id
+		WHERE a.feature_id = ${featureId}
+		ORDER BY a.enqueued_at DESC, a.id DESC
 	`;
 
 	// Get failures
@@ -162,30 +209,37 @@ export async function queryFeatureDetail(
 		LIMIT 50
 	`;
 
-	// Parse progress if available
-	let progressSummary = null;
+	let progressSummary: FeatureDetail["progress"] = null;
 	if (progress) {
-		const requirements = progress.requirements as Array<Record<string, unknown>>;
+		const requirements = Array.isArray(progress.requirements)
+			? progress.requirements.map(mapRequirementProgress)
+			: [];
+		const summary = asRecord(progress.summary);
+		const activeRequirementId =
+			typeof summary.activeRequirementId === "string"
+				? summary.activeRequirementId
+				: (requirements.find((requirement) => requirement.status === "in_progress")?.id ?? null);
 		progressSummary = {
-			totalRequirements: requirements?.length ?? 0,
-			passedRequirements: requirements?.filter((r) => r.passes === true).length ?? 0,
-			activeRequirements:
-				requirements?.filter(
-					(r) =>
-						r.tdd &&
-						(r.tdd as Record<string, unknown>).test &&
-						!((r.tdd as Record<string, unknown>).test as Record<string, unknown>).passes &&
-						((r.tdd as Record<string, unknown>).implement as Record<string, unknown>)?.passes !==
-							false,
-				).length ?? 0,
-			stuckRequirements: requirements?.filter((r) => r.stuck === true).length ?? 0,
-			invalidRequirements: requirements?.filter((r) => r.invalidTest === true).length ?? 0,
-			remainingRequirements:
-				requirements?.filter((r) => r.passes !== true && r.stuck !== true && r.invalidTest !== true)
-					.length ?? 0,
+			totalRequirements: requirements.length,
+			passedRequirements: requirements.filter((requirement) => requirement.status === "passed")
+				.length,
+			activeRequirements: requirements.filter((requirement) => requirement.status === "in_progress")
+				.length,
+			stuckRequirements: requirements.filter((requirement) => requirement.status === "stuck")
+				.length,
+			invalidRequirements: requirements.filter((requirement) => requirement.status === "invalid")
+				.length,
+			remainingRequirements: requirements.filter(
+				(requirement) =>
+					requirement.status === "not_started" || requirement.status === "in_progress",
+			).length,
+			activeRequirementId,
+			requirements,
 			lastUpdatedAt: progress.created_at as Date,
 		};
 	}
+
+	const mappedAttempts = attempts.map(mapAttempt);
 
 	return {
 		id: feature.id as string,
@@ -210,19 +264,14 @@ export async function queryFeatureDetail(
 				}
 			: null,
 		progress: progressSummary,
-		attempts: attempts.map((a) => ({
-			id: a.id as string,
-			status: a.status as string,
-			branchName: a.branch_name as string,
-			workerRegistrationId: (a.worker_registration_id as string) ?? null,
-			processPid: (a.process_pid as number) ?? null,
-			heartbeatAt: (a.heartbeat_at as Date) ?? null,
-			enqueuedAt: a.enqueued_at as Date,
-			startedAt: (a.started_at as Date) ?? null,
-			endedAt: (a.ended_at as Date) ?? null,
-			exitCode: (a.exit_code as number) ?? null,
-			structuredResult: a.structured_result ?? null,
-		})),
+		activeAttempt:
+			mappedAttempts.find(
+				(attempt) =>
+					attempt.status === "RUNNING" ||
+					attempt.status === "CANCEL_REQUESTED" ||
+					attempt.status === "QUEUED",
+			) ?? null,
+		attempts: mappedAttempts,
 		failures: failures.map((f) => ({
 			id: f.id as string,
 			attemptId: (f.attempt_id as string) ?? null,
@@ -234,7 +283,7 @@ export async function queryFeatureDetail(
 		diagnosticLogs: diagnosticLogs.map((dl) => ({
 			id: dl.id as string,
 			attemptId: dl.attempt_id as string,
-			sequence: dl.sequence as number,
+			sequence: Number(dl.sequence),
 			stream: dl.stream as string,
 			body: dl.body as string,
 			truncated: dl.truncated as boolean,
@@ -259,5 +308,87 @@ export async function queryFeatureDetail(
 			summary: a.summary as string,
 			occurredAt: a.occurred_at as Date,
 		})),
+	};
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+	return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function phasePasses(value: unknown): boolean {
+	if (typeof value === "boolean") return value;
+	return asRecord(value).passes === true;
+}
+
+function deriveRequirementStatus(
+	passes: boolean,
+	stuck: boolean,
+	invalidTest: boolean,
+	started: boolean,
+): RequirementProgress["status"] {
+	if (passes) return "passed";
+	if (stuck) return "stuck";
+	if (invalidTest) return "invalid";
+	return started ? "in_progress" : "not_started";
+}
+
+function mapRequirementProgress(value: unknown): RequirementProgress {
+	const requirement = asRecord(value);
+	const tdd = asRecord(requirement.tdd);
+	const passes = requirement.passes === true;
+	const stuck = requirement.stuck === true;
+	const invalidTest = requirement.invalidTest === true;
+	const phases = {
+		red: phasePasses(tdd.test),
+		green: phasePasses(tdd.implement),
+		refactor: phasePasses(tdd.refactor),
+	};
+	const started =
+		requirement.status === "in_progress" || phases.red || phases.green || phases.refactor;
+	const status = deriveRequirementStatus(passes, stuck, invalidTest, started);
+
+	return {
+		id: String(requirement.id ?? ""),
+		description: typeof requirement.description === "string" ? requirement.description : "",
+		acceptance: Array.isArray(requirement.acceptance) ? requirement.acceptance.map(String) : [],
+		dependsOn: Array.isArray(requirement.dependsOn) ? requirement.dependsOn.map(String) : [],
+		blockedReason:
+			typeof requirement.blockedReason === "string"
+				? requirement.blockedReason
+				: typeof requirement.stuckReason === "string"
+					? requirement.stuckReason
+					: null,
+		status,
+		passes,
+		stuck,
+		invalidTest,
+		phases,
+	};
+}
+
+function mapAttempt(attempt: Record<string, unknown>): FeatureAttempt {
+	const workerId = attempt.worker_id as string | null;
+	return {
+		id: attempt.id as string,
+		status: attempt.status as string,
+		branchName: attempt.branch_name as string,
+		predecessorAttemptId: (attempt.predecessor_attempt_id as string) ?? null,
+		workerRegistrationId: (attempt.worker_registration_id as string) ?? null,
+		worker: workerId
+			? {
+					workerId,
+					hostname: attempt.worker_hostname as string,
+					capacity: attempt.worker_capacity as number,
+					activeJobs: attempt.worker_active_jobs as number,
+					lastHeartbeatAt: attempt.worker_last_heartbeat_at as Date,
+				}
+			: null,
+		processPid: (attempt.process_pid as number) ?? null,
+		heartbeatAt: (attempt.heartbeat_at as Date) ?? null,
+		enqueuedAt: attempt.enqueued_at as Date,
+		startedAt: (attempt.started_at as Date) ?? null,
+		endedAt: (attempt.ended_at as Date) ?? null,
+		exitCode: (attempt.exit_code as number) ?? null,
+		structuredResult: attempt.structured_result ?? null,
 	};
 }
