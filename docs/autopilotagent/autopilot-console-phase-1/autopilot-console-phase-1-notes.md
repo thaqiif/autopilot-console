@@ -1,8 +1,8 @@
 # autopilot-console-phase-1 Progress Notes
 
 ## Current State
-- Last verified complete in the task ledger: requirement 22.
-- Working on: requirements 23–31 remain incomplete after the 2026-07-21
+- Last verified complete in the task ledger: requirement 23.
+- Working on: requirements 24–31 remain incomplete after the 2026-07-21
   acceptance-level re-audit.
 - The new API, web, deployment, and release-test code is useful progress, but it
   does not close the remaining production wiring and end-to-end proof gaps.
@@ -24,6 +24,23 @@
   - requirement 21 API gates: GREEN (typecheck, 122 tests, lint).
   - requirement 22 API/domain gates: GREEN (typecheck, 127 API tests, 14
     task-domain tests, lint, and diff check).
+  - requirement 23 API gates: GREEN (typecheck, 138 API tests, lint, 38
+    targeted read/SSE integration tests, and seven target-scale performance
+    tests).
+
+## Files Modified (req 23)
+- apps/api/src/queries/{overview-query,feature-detail-query}.ts — consolidated
+  persisted overview metrics and reconstructed mutable requirement, worker,
+  attempt, failure, bounded-log, PR, and activity detail.
+- apps/api/src/routes/{attention,events,feature-reads}.ts — added persisted
+  stale-sync attention/filtering, explicit SSE gap reconciliation, and
+  authenticated job-detail reads.
+- apps/api/src/queries/read-projections.test.ts and
+  apps/api/src/routes/{events.test,reads.integration.test}.ts — added RED/GREEN
+  projection, filter, detail, pagination, bounded-log, SSE replay/gap, and REST
+  reconciliation coverage.
+- apps/api/src/auth/auth.integration.test.ts — moved the remaining API auth
+  fixture off the shared public schema to keep the full package gate isolated.
 
 ## Files Modified (req 21)
 - apps/api/src/app.integration.test.ts — added exact public-route, invalid and
@@ -64,7 +81,8 @@
   cancellation routing, task invalidate/replace APIs, and target-scale valid
   queue latency proof. Resolved on 2026-07-21 by the requirement 22 cycle below.
 - Requirement 23 lacks complete attention/detail projections and pagination;
-  SSE gap/reconciliation proof is incomplete.
+  SSE gap/reconciliation proof is incomplete. Resolved on 2026-07-29 by the
+  requirement 23 cycle below.
 - Requirements 24–29 still have API/UI contract gaps, incomplete view-state and
   SSE handling, no validate-before-save project flow, incorrect task invalidation
   and confirmation context, incomplete job/PR integration, and presence/width
@@ -143,6 +161,9 @@
   API typecheck, all 122 API tests, and API lint are green.
 - [2026-07-21] Completed requirement 22 after RED/GREEN/refactor; all 127 API
   tests and 14 task-domain tests pass with both package typecheck/lint gates.
+- [2026-07-29] Completed requirement 23 after RED/GREEN/refactor; all 138 API
+  tests, 38 targeted read/SSE tests, seven target-scale performance tests,
+  API typecheck, and API lint pass.
 
 ## Requirement 31 history (continued)
 
@@ -187,6 +208,20 @@
 - Commit: cc94b26 feat(api): complete idempotent mutation lifecycle (req 22)
 - Files Changed: mutation idempotency boundary, project/task/job/PR routes,
   mutation integration coverage, and task approval domain service listed above.
+
+### Requirement 23: Persisted read APIs and reconnectable SSE
+- Started: 2026-07-29
+- Completed: 2026-07-29
+- TDD: RED confirmed for missing authoritative release/stale-sync metrics,
+  mutable requirement and active-worker detail, job-detail reads, and explicit
+  SSE gap reconciliation; GREEN and scoped simplifier refactor completed.
+- Verification: API typecheck green; 138 API tests green; API lint green; 38
+  read/SSE integration tests green; seven target-scale performance tests green
+  at 10 projects, 100 releases, 500 features, and four active jobs.
+- Commit: 5315a7a feat(api): complete persisted read and SSE projections (req 23)
+- Files Changed: persisted query projections, attention/event/feature read
+  routes, isolated integration fixtures, and acceptance-driven tests listed
+  above.
 
 ### Requirement 25: Build global Overview, full Attention, Activity, and Settings/status pages
 - Component implementation recorded: 2026-07-18

@@ -1570,15 +1570,15 @@
         "test": {
           "description": "Seed isolated PostgreSQL fixtures and write failing read API tests for every projection, filter, pagination cursor, feature/job reconstruction, UTC serialization, bounded logs, SSE reconnect/gaps, REST reconciliation, and target-scale query budgets.",
           "file": "apps/api/src/routes/reads.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Implement optimized persisted queries and authenticated read/SSE routes with typed contracts, stable pagination, derived attention/progress, and event-ID replay.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Remove N+1 queries, add or adjust evidence-backed indexes, share projection mappers, and rerun target-scale latency plus SSE recovery tests.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1586,7 +1586,7 @@
         "Inspect query counts/plans for overview and feature detail.",
         "Disconnect SSE, create events, reconnect and compare the subsequent REST representation."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "24",
