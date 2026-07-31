@@ -214,50 +214,50 @@ const MOCK_ACTIVITY = {
 };
 
 /**
-	 * Production health contract shape — matches createProductionHealthProbes
-	 * output (req 22/30). Settings must not depend on fixture-only fields.
-	 */
-	const PRODUCTION_HEALTH = {
+ * Production health contract shape — matches createProductionHealthProbes
+ * output (req 22/30). Settings must not depend on fixture-only fields.
+ */
+const PRODUCTION_HEALTH = {
+	status: "ok" as const,
+	database: {
+		name: "database",
 		status: "ok" as const,
-		database: {
-			name: "database",
-			status: "ok" as const,
-			detail: { available: true },
+		detail: { available: true },
+	},
+	worker: {
+		name: "worker",
+		status: "ok" as const,
+		detail: {
+			active: true,
+			capacity: 4,
+			activeJobs: 2,
+			availableSlots: 2,
+			lastHeartbeatAt: "2026-07-31T12:00:00.000Z",
+			heartbeatAge: 1_500,
+			queueDepth: 3,
+			oldestQueuedAgeMs: 42_000,
+			pollingLagMs: 900,
 		},
-		worker: {
-			name: "worker",
-			status: "ok" as const,
-			detail: {
-				active: true,
-				capacity: 4,
-				activeJobs: 2,
-				availableSlots: 2,
-				lastHeartbeatAt: "2026-07-31T12:00:00.000Z",
-				heartbeatAge: 1_500,
-				queueDepth: 3,
-				oldestQueuedAgeMs: 42_000,
-				pollingLagMs: 900,
-			},
+	},
+	autopilot: {
+		name: "autopilot",
+		status: "ok" as const,
+		detail: { available: true },
+	},
+	github: {
+		name: "github",
+		status: "ok" as const,
+		detail: {
+			authenticated: true,
+			projectAvailable: true,
+			repositoryReadable: true,
 		},
-		autopilot: {
-			name: "autopilot",
-			status: "ok" as const,
-			detail: { available: true },
-		},
-		github: {
-			name: "github",
-			status: "ok" as const,
-			detail: {
-				authenticated: true,
-				projectAvailable: true,
-				repositoryReadable: true,
-			},
-		},
-		checkedAt: "2026-07-31T12:00:00.000Z",
-	};
+	},
+	checkedAt: "2026-07-31T12:00:00.000Z",
+};
 
-	/** Alias kept for older helpers that still refer to MOCK_HEALTH. */
-	const MOCK_HEALTH = PRODUCTION_HEALTH;
+/** Alias kept for older helpers that still refer to MOCK_HEALTH. */
+const MOCK_HEALTH = PRODUCTION_HEALTH;
 
 function installFetchMock(overrides?: {
 	attentionData?: unknown;
@@ -726,223 +726,221 @@ describe("activity page", () => {
 });
 
 // ---------------------------------------------------------------------------
-	// 6. Settings page — production health contract (req 30)
-	// ---------------------------------------------------------------------------
+// 6. Settings page — production health contract (req 30)
+// ---------------------------------------------------------------------------
 
-	describe("settings and health page", () => {
-		let restore: () => void;
-		beforeEach(() => {
-			cleanup();
-			restore = installFetchMock({ healthData: PRODUCTION_HEALTH });
-		});
-		afterEach(() => {
-			cleanup();
-			restore();
-		});
+describe("settings and health page", () => {
+	let restore: () => void;
+	beforeEach(() => {
+		cleanup();
+		restore = installFetchMock({ healthData: PRODUCTION_HEALTH });
+	});
+	afterEach(() => {
+		cleanup();
+		restore();
+	});
 
-		test("renders settings page heading", async () => {
-			renderAt("/settings");
-			await waitFor(() => {
-				expect(screen.queryByRole("heading", { name: /settings|status|health/i })).toBeTruthy();
-			});
-		});
-
-		test("renders every production health component with accessible status semantics", async () => {
-			renderAt("/settings");
-			await waitFor(() => {
-				expect(screen.queryByRole("heading", { name: /settings|status|health/i })).toBeTruthy();
-			});
-
-			for (const label of ["Database", "Worker", "Autopilot", "GitHub", "Runtime health"]) {
-				expect(screen.getByText(label)).toBeTruthy();
-			}
-
-			const healthy = document.querySelectorAll("[data-status=\"healthy\"]");
-			expect(healthy.length).toBeGreaterThanOrEqual(4);
-
-			const body = document.body.textContent ?? "";
-			expect(body).toMatch(/healthy/i);
-			expect(body).not.toMatch(/postgresql:\/\/\w+:\w+@/);
-			expect(body).not.toMatch(/ghp_[a-zA-Z0-9]{36}/);
-			expect(body).not.toMatch(/Bearer [a-zA-Z0-9_-]{20,}/);
-		});
-
-		test("renders worker capacity, active jobs, and heartbeat from production detail", async () => {
-			renderAt("/settings");
-			await waitFor(() => {
-				expect(screen.queryByText(/worker capacity/i)).toBeTruthy();
-			});
-			const body = document.body.textContent ?? "";
-			expect(body).toContain("Worker Capacity");
-			expect(body).toContain("4");
-			expect(body).toContain("Active Jobs");
-			expect(body).toContain("2");
-			expect(body).toContain("Worker Heartbeat");
-			expect(body).toContain("1500");
-		});
-
-		test("renders queue depth, oldest queued age, and GitHub polling lag", async () => {
-			renderAt("/settings");
-			await waitFor(() => {
-				expect(screen.queryByText(/queue depth/i)).toBeTruthy();
-			});
-			const body = document.body.textContent ?? "";
-			expect(body).toContain("Queue Depth");
-			expect(body).toContain("3");
-			expect(body).toContain("Oldest Queued Age");
-			expect(body).toContain("42000");
-			expect(body).toContain("Polling Lag");
-			expect(body).toContain("900");
-		});
-
-		test("distinguishes degraded and unavailable values with text and data-status", async () => {
-			restore();
-			const degraded = {
-				...PRODUCTION_HEALTH,
-				status: "degraded" as const,
-				worker: {
-					name: "worker",
-					status: "down" as const,
-					detail: {
-						active: false,
-						capacity: 0,
-						activeJobs: 0,
-						availableSlots: 0,
-						lastHeartbeatAt: null,
-						heartbeatAge: null,
-						queueDepth: 0,
-						oldestQueuedAgeMs: null,
-						pollingLagMs: null,
-					},
-				},
-				github: {
-					name: "github",
-					status: "down" as const,
-					detail: {
-						authenticated: false,
-						projectAvailable: false,
-					},
-				},
-			};
-			restore = installFetchMock({ healthData: degraded });
-			renderAt("/settings");
-			await waitFor(() => {
-				expect(screen.queryByRole("heading", { name: /settings|status|health/i })).toBeTruthy();
-			});
-
-			const body = document.body.textContent ?? "";
-			expect(body).toMatch(/degraded|unavailable|down/i);
-			expect(
-				document.querySelector("[data-status=\"degraded\"], [data-status=\"unavailable\"]"),
-			).toBeTruthy();
-			expect(body).toMatch(/Oldest Queued Age/i);
-			expect(body).toMatch(/unavailable/i);
-			expect(body).toMatch(/Polling Lag/i);
-		});
-
-		test("refresh reloads authoritative health values rather than retaining prior payload", async () => {
-			let healthCall = 0;
-			const original = globalThis.fetch;
-			globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-				const url =
-					typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-				if (url.includes("/api/health")) {
-					healthCall += 1;
-					const detail =
-						healthCall === 1
-							? { ...PRODUCTION_HEALTH.worker.detail, queueDepth: 1, pollingLagMs: 100 }
-							: { ...PRODUCTION_HEALTH.worker.detail, queueDepth: 9, pollingLagMs: 777 };
-					const payload = {
-						...PRODUCTION_HEALTH,
-						worker: { ...PRODUCTION_HEALTH.worker, detail },
-						checkedAt:
-							healthCall === 1 ? "2026-07-31T12:00:00.000Z" : "2026-07-31T12:05:00.000Z",
-					};
-					return new Response(JSON.stringify({ ok: true, data: payload }), {
-						status: 200,
-						headers: { "Content-Type": "application/json" },
-					});
-				}
-				return original(input as never, init);
-			}) as typeof fetch;
-
-			try {
-				renderAt("/settings");
-				await waitFor(() => {
-					expect(document.body.textContent).toContain("Queue Depth");
-					expect(document.body.textContent).toContain("1");
-				});
-				expect(document.body.textContent).toContain("100");
-
-				fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
-				await waitFor(() => {
-					expect(document.body.textContent).toContain("9");
-				});
-				expect(document.body.textContent).toContain("777");
-				expect(healthCall).toBeGreaterThanOrEqual(2);
-			} finally {
-				globalThis.fetch = original;
-			}
-		});
-
-		test("displays database status", async () => {
-			renderAt("/settings");
-			await waitFor(() => {
-				expect(screen.queryByText(/database/i)).toBeTruthy();
-			});
-		});
-
-		test("displays worker capacity and heartbeat", async () => {
-			renderAt("/settings");
-			await waitFor(() => {
-				expect(screen.queryByText(/database/i)).toBeTruthy();
-			});
-			const body = document.body.textContent ?? "";
-			expect(body).toMatch(/capacity/i);
-			expect(body).toMatch(/heartbeat/i);
-		});
-
-		test("displays queue depth", async () => {
-			renderAt("/settings");
-			await waitFor(() => {
-				expect(screen.queryByText(/queue depth/i)).toBeTruthy();
-			});
-		});
-
-		test("displays polling lag", async () => {
-			renderAt("/settings");
-			await waitFor(() => {
-				expect(screen.queryByText(/polling lag/i)).toBeTruthy();
-			});
-		});
-
-		test("displays GitHub authentication status", async () => {
-			renderAt("/settings");
-			await waitFor(() => {
-				expect(screen.queryByText(/github/i)).toBeTruthy();
-			});
-		});
-
-		test("displays runtime configuration health", async () => {
-			renderAt("/settings");
-			await waitFor(() => {
-				expect(screen.queryByText(/runtime/i)).toBeTruthy();
-			});
-		});
-
-		test("does not expose credentials or connection strings", async () => {
-			renderAt("/settings");
-			await waitFor(() => {
-				expect(screen.queryByText(/database/i)).toBeTruthy();
-			});
-			const body = document.body.textContent ?? "";
-			expect(body).not.toMatch(/postgresql:\/\/\w+:\w+@/);
-			expect(body).not.toMatch(/ghp_[a-zA-Z0-9]{36}/);
-			expect(body).not.toMatch(/Bearer [a-zA-Z0-9_-]{20,}/);
+	test("renders settings page heading", async () => {
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByRole("heading", { name: /settings|status|health/i })).toBeTruthy();
 		});
 	});
 
-	// ---------------------------------------------------------------------------
+	test("renders every production health component with accessible status semantics", async () => {
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByRole("heading", { name: /settings|status|health/i })).toBeTruthy();
+		});
+
+		for (const label of ["Database", "Worker", "Autopilot", "GitHub", "Runtime health"]) {
+			expect(screen.getByText(label)).toBeTruthy();
+		}
+
+		const healthy = document.querySelectorAll('[data-status="healthy"]');
+		expect(healthy.length).toBeGreaterThanOrEqual(4);
+
+		const body = document.body.textContent ?? "";
+		expect(body).toMatch(/healthy/i);
+		expect(body).not.toMatch(/postgresql:\/\/\w+:\w+@/);
+		expect(body).not.toMatch(/ghp_[a-zA-Z0-9]{36}/);
+		expect(body).not.toMatch(/Bearer [a-zA-Z0-9_-]{20,}/);
+	});
+
+	test("renders worker capacity, active jobs, and heartbeat from production detail", async () => {
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByText(/worker capacity/i)).toBeTruthy();
+		});
+		const body = document.body.textContent ?? "";
+		expect(body).toContain("Worker Capacity");
+		expect(body).toContain("4");
+		expect(body).toContain("Active Jobs");
+		expect(body).toContain("2");
+		expect(body).toContain("Worker Heartbeat");
+		expect(body).toContain("1500");
+	});
+
+	test("renders queue depth, oldest queued age, and GitHub polling lag", async () => {
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByText(/queue depth/i)).toBeTruthy();
+		});
+		const body = document.body.textContent ?? "";
+		expect(body).toContain("Queue Depth");
+		expect(body).toContain("3");
+		expect(body).toContain("Oldest Queued Age");
+		expect(body).toContain("42000");
+		expect(body).toContain("Polling Lag");
+		expect(body).toContain("900");
+	});
+
+	test("distinguishes degraded and unavailable values with text and data-status", async () => {
+		restore();
+		const degraded = {
+			...PRODUCTION_HEALTH,
+			status: "degraded" as const,
+			worker: {
+				name: "worker",
+				status: "down" as const,
+				detail: {
+					active: false,
+					capacity: 0,
+					activeJobs: 0,
+					availableSlots: 0,
+					lastHeartbeatAt: null,
+					heartbeatAge: null,
+					queueDepth: 0,
+					oldestQueuedAgeMs: null,
+					pollingLagMs: null,
+				},
+			},
+			github: {
+				name: "github",
+				status: "down" as const,
+				detail: {
+					authenticated: false,
+					projectAvailable: false,
+				},
+			},
+		};
+		restore = installFetchMock({ healthData: degraded });
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByRole("heading", { name: /settings|status|health/i })).toBeTruthy();
+		});
+
+		const body = document.body.textContent ?? "";
+		expect(body).toMatch(/degraded|unavailable|down/i);
+		expect(
+			document.querySelector('[data-status="degraded"], [data-status="unavailable"]'),
+		).toBeTruthy();
+		expect(body).toMatch(/Oldest Queued Age/i);
+		expect(body).toMatch(/unavailable/i);
+		expect(body).toMatch(/Polling Lag/i);
+	});
+
+	test("refresh reloads authoritative health values rather than retaining prior payload", async () => {
+		let healthCall = 0;
+		const original = globalThis.fetch;
+		globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			if (url.includes("/api/health")) {
+				healthCall += 1;
+				const detail =
+					healthCall === 1
+						? { ...PRODUCTION_HEALTH.worker.detail, queueDepth: 1, pollingLagMs: 100 }
+						: { ...PRODUCTION_HEALTH.worker.detail, queueDepth: 9, pollingLagMs: 777 };
+				const payload = {
+					...PRODUCTION_HEALTH,
+					worker: { ...PRODUCTION_HEALTH.worker, detail },
+					checkedAt: healthCall === 1 ? "2026-07-31T12:00:00.000Z" : "2026-07-31T12:05:00.000Z",
+				};
+				return new Response(JSON.stringify({ ok: true, data: payload }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			return original(input as never, init);
+		}) as typeof fetch;
+
+		try {
+			renderAt("/settings");
+			await waitFor(() => {
+				expect(document.body.textContent).toContain("Queue Depth");
+				expect(document.body.textContent).toContain("1");
+			});
+			expect(document.body.textContent).toContain("100");
+
+			fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+			await waitFor(() => {
+				expect(document.body.textContent).toContain("9");
+			});
+			expect(document.body.textContent).toContain("777");
+			expect(healthCall).toBeGreaterThanOrEqual(2);
+		} finally {
+			globalThis.fetch = original;
+		}
+	});
+
+	test("displays database status", async () => {
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByText(/database/i)).toBeTruthy();
+		});
+	});
+
+	test("displays worker capacity and heartbeat", async () => {
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByText(/database/i)).toBeTruthy();
+		});
+		const body = document.body.textContent ?? "";
+		expect(body).toMatch(/capacity/i);
+		expect(body).toMatch(/heartbeat/i);
+	});
+
+	test("displays queue depth", async () => {
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByText(/queue depth/i)).toBeTruthy();
+		});
+	});
+
+	test("displays polling lag", async () => {
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByText(/polling lag/i)).toBeTruthy();
+		});
+	});
+
+	test("displays GitHub authentication status", async () => {
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByText(/github/i)).toBeTruthy();
+		});
+	});
+
+	test("displays runtime configuration health", async () => {
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByText(/runtime/i)).toBeTruthy();
+		});
+	});
+
+	test("does not expose credentials or connection strings", async () => {
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByText(/database/i)).toBeTruthy();
+		});
+		const body = document.body.textContent ?? "";
+		expect(body).not.toMatch(/postgresql:\/\/\w+:\w+@/);
+		expect(body).not.toMatch(/ghp_[a-zA-Z0-9]{36}/);
+		expect(body).not.toMatch(/Bearer [a-zA-Z0-9_-]{20,}/);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // 7. View states — loading, empty, error, stale, unauthorized
 // ---------------------------------------------------------------------------
 
