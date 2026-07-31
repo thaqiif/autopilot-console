@@ -5,7 +5,9 @@
  * and AutopilotRunner so the full owner journey can run without real Git repos,
  * GitHub API calls, or the installed autopilot-multi CLI.
  *
- * All state is per-instance so tests are isolated.
+ * All state is per-instance so tests are isolated. Optional HoldGate hooks pause
+ * push/PR/Autopilot wait so durability tests can dispose and recreate components
+ * at real external-effect boundaries without sleeps.
  */
 
 import type {
@@ -34,6 +36,79 @@ import type {
 	ValidateAccessRequest,
 	ValidateAccessResult,
 } from "../../packages/github/src/index";
+
+// ── Controllable hold gates (restart / race boundaries) ─────────────────
+
+/**
+ * Deterministic pause point for fake external effects.
+ * enable() freezes waitIfHeld() callers; disable() releases every waiter;
+ * abandonAll() drops waiters without settling (models a killed process —
+ * no further writes from the disposed owner).
+ */
+export interface HoldGate {
+	enable(): void;
+	disable(): void;
+	/**
+	 * Drop every waiter without resolve/reject so the disposed process cannot
+	 * complete side effects. Waiters remain pending forever (process gone).
+	 */
+	abandonAll(): void;
+	isEnabled(): boolean;
+	waitingCount(): number;
+	/** Resolves once at least one caller is blocked inside waitIfHeld(). */
+	whenWaiting(): Promise<void>;
+	waitIfHeld(): Promise<void>;
+}
+
+export function createHoldGate(): HoldGate {
+	let enabled = false;
+	let waiting = 0;
+	const releaseWaiters: Array<() => void> = [];
+	const waitingNotifiers: Array<() => void> = [];
+
+	return {
+		enable() {
+			enabled = true;
+		},
+		disable() {
+			enabled = false;
+			while (releaseWaiters.length > 0) {
+				releaseWaiters.shift()?.();
+			}
+		},
+		abandonAll() {
+			enabled = false;
+			// Intentionally do not resolve or reject — disposed process is gone.
+			releaseWaiters.length = 0;
+			waiting = 0;
+		},
+		isEnabled() {
+			return enabled;
+		},
+		waitingCount() {
+			return waiting;
+		},
+		whenWaiting() {
+			if (waiting > 0) return Promise.resolve();
+			return new Promise<void>((resolve) => {
+				waitingNotifiers.push(resolve);
+			});
+		},
+		async waitIfHeld() {
+			if (!enabled) return;
+			waiting += 1;
+			while (waitingNotifiers.length > 0) {
+				waitingNotifiers.shift()?.();
+			}
+			await new Promise<void>((resolve) => {
+				releaseWaiters.push(() => {
+					waiting = Math.max(0, waiting - 1);
+					resolve();
+				});
+			});
+		},
+	};
+}
 
 // ── Fake Git ────────────────────────────────────────────────────────────
 
@@ -76,6 +151,8 @@ function okPreflight(request: GitPreflightRequest): GitPreflightResult {
 export function createFakeGit(overrides?: {
 	state?: FakeGitState;
 	preflight?: (req: GitPreflightRequest) => Promise<GitPreflightResult> | GitPreflightResult;
+	/** When set, pushFeatureBranch blocks until the gate is disabled. */
+	pushHold?: HoldGate;
 }): GitGateway {
 	const state = overrides?.state ?? createFakeGitState();
 	let commitCounter = 0;
@@ -111,6 +188,20 @@ export function createFakeGit(overrides?: {
 		},
 
 		async pushFeatureBranch(request: SafePushRequest): Promise<SafePushResult> {
+			await overrides?.pushHold?.waitIfHeld();
+			const already = state.pushes.find(
+				(push) =>
+					push.featureBranch === request.featureBranch &&
+					push.expectedHeadSha === request.expectedHeadSha,
+			);
+			if (already) {
+				return {
+					remoteName: request.remoteName,
+					featureBranch: request.featureBranch,
+					headSha: request.expectedHeadSha,
+					alreadyUpToDate: true,
+				};
+			}
 			state.pushes.push(request);
 			return {
 				remoteName: request.remoteName,
@@ -145,6 +236,10 @@ export function createFakeGitHub(overrides?: {
 	validateAccess?: (
 		req: ValidateAccessRequest,
 	) => Promise<ValidateAccessResult> | ValidateAccessResult;
+	/** When set, createPullRequest blocks until the gate is disabled. */
+	createPrHold?: HoldGate;
+	/** When set, getPullRequestStatus blocks until the gate is disabled. */
+	pollHold?: HoldGate;
 }): GitHubGateway {
 	const state = overrides?.state ?? createFakeGitHubState();
 
@@ -184,6 +279,7 @@ export function createFakeGitHub(overrides?: {
 		},
 
 		async createPullRequest(request: CreatePullRequestRequest): Promise<PullRequestIdentity> {
+			await overrides?.createPrHold?.waitIfHeld();
 			const existing = await this.findExistingPullRequest({
 				repository: request.repository,
 				headBranch: request.headBranch,
@@ -224,6 +320,7 @@ export function createFakeGitHub(overrides?: {
 		},
 
 		async getPullRequestStatus(request): Promise<PullRequestStatus> {
+			await overrides?.pollHold?.waitIfHeld();
 			const status = state.statuses.get(request.number);
 			if (status) return status;
 			return {
@@ -314,9 +411,12 @@ export function createFakeAutopilotState(): FakeAutopilotState {
 export function createFakeAutopilot(overrides?: {
 	state?: FakeAutopilotState;
 	onStart?: (req: import("../../packages/autopilot/src/index").AutopilotStartRequest) => void;
+	/** When set, wait() blocks until the gate is disabled (live ownership). */
+	waitHold?: HoldGate;
 }): AutopilotRunner {
 	const state = overrides?.state ?? createFakeAutopilotState();
 	let runCounter = 0;
+	const livePids = new Set<number>();
 
 	return {
 		async validateRuntime(): Promise<RuntimeValidation> {
@@ -356,39 +456,48 @@ export function createFakeAutopilot(overrides?: {
 				startedAt: new Date().toISOString(),
 			};
 			state.runs.set(request.projectId, handle);
+			livePids.add(handle.processIdentity.pid);
 			return handle;
 		},
 
-		async isAlive(): Promise<boolean> {
-			return false;
+		async isAlive(handle: AutopilotRunHandle): Promise<boolean> {
+			return livePids.has(handle.processIdentity.pid);
 		},
 
-		async signal(): Promise<void> {},
+		async signal(
+			_handle: AutopilotRunHandle,
+			_kind: import("../../packages/autopilot/src/index").SignalKind,
+		): Promise<void> {},
 
 		async wait(
 			handle: AutopilotRunHandle,
 		): Promise<import("../../packages/autopilot/src/index").NormalizedRunResult> {
-			const result = state.results.get(handle.projectId);
-			const exitCode = result?.exitCode ?? 0;
-			const allPass = result?.allPass ?? true;
-			return {
-				exitCode,
-				signal: null,
-				outcome: allPass && exitCode === 0 ? "succeeded" : "failed",
-				allPass,
-				progress: {
-					total: 2,
-					passed: allPass ? 2 : 0,
-					stuck: 0,
-					invalidTest: 0,
-					remaining: allPass ? 0 : 2,
+			try {
+				await overrides?.waitHold?.waitIfHeld();
+				const result = state.results.get(handle.projectId);
+				const exitCode = result?.exitCode ?? 0;
+				const allPass = result?.allPass ?? true;
+				return {
+					exitCode,
+					signal: null,
+					outcome: allPass && exitCode === 0 ? "succeeded" : "failed",
 					allPass,
-					blockedReasons: [],
-				},
-				stdoutDiagnostic: "run complete",
-				stderrDiagnostic: "",
-				redactedMessage: allPass ? "All requirements pass" : "Some requirements failed",
-			};
+					progress: {
+						total: 2,
+						passed: allPass ? 2 : 0,
+						stuck: 0,
+						invalidTest: 0,
+						remaining: allPass ? 0 : 2,
+						allPass,
+						blockedReasons: [],
+					},
+					stdoutDiagnostic: "run complete",
+					stderrDiagnostic: "",
+					redactedMessage: allPass ? "All requirements pass" : "Some requirements failed",
+				};
+			} finally {
+				livePids.delete(handle.processIdentity.pid);
+			}
 		},
 
 		async readProgress(): Promise<import("../../packages/autopilot/src/index").ProgressSnapshot> {
