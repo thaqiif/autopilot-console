@@ -21,7 +21,7 @@
     "GitHub webhooks or outbound email, SMS, chat, or push notifications.",
     "Same-project concurrent development, sprint planning, native mobile applications, or offline mutations."
   ],
-  "technicalNotes": "The repository is greenfield: analysis found only CHANGELOG.md, docs/autopilot-console-vision.md, and this PRD, with no application code or tests to extend. Follow the prescribed Bun monorepo boundaries: apps/web (React + Vite), apps/api (Hono), apps/worker, and packages/database, domain, shared, autopilot, github, and git. PostgreSQL is the source of truth and queue; use transactional row locking, uniqueness constraints, immutable attempts, and persisted intents rather than in-memory jobs. All timestamps are UTC at rest. The installed autopilot-multi contract uses a requirements array with mutable passes/stuck/invalidTest fields, stores run.pid beside the task file, emits sibling notes and analytics, accepts SIGUSR1 for graceful stop, and currently checks out a branch derived from the task filename; the adapter contract must reconcile that behavior with Console's deterministic feature/<feature-id>-<slug> branch without forking the engine or using destructive Git operations. The current analysis environment does not have Bun on PATH, so Bun must be installed before autonomous execution and autopilotagent.json must be initialized for this repository. Use fake clocks and event-driven synchronization instead of sleeps, isolated or rollback database fixtures, fixed executable argument arrays without a shell, redaction before persistence, and at least 90% branch coverage for critical domain, queue, path-security, process-control, and adapter modules.",
+  "technicalNotes": "Requirements 1-20 establish the domain, persistence, adapter, queue, process-control, and GitHub worker components. Requirements 21-48 distinguish component behavior, production composition, owner UI, and release qualification so one missing deployment or test gate does not obscure otherwise complete work. A requirement passes only when every acceptance statement is directly exercised by its named test and every verification step succeeds; a component-level test does not prove that the component is composed in apps/api/src/main.ts, apps/worker/src/main.ts, or compose.yaml. PostgreSQL remains the source of truth. Long-running, process, Git, and GitHub effects belong to durable worker consumers, never HTTP request scope. Use isolated database schemas, controllable executables/adapters, fake clocks or bounded event synchronization, fixed argv without a shell, redaction before persistence/emission, UTC at rest, and at least 90% branch coverage for every named critical module.",
   "_tdd": true,
   "_priority_order": [
     "1. Bootstrap executable workspace and test infrastructure",
@@ -1379,7 +1379,7 @@
     {
       "id": "21",
       "category": "integration",
-      "description": "Create the Hono API application boundary with authentication/CSRF enforcement, typed contracts, normalized errors, correlation IDs, health/readiness, and test harness.",
+      "description": "Enforce the authenticated HTTP boundary, session lifecycle, CSRF/origin validation, safe error envelopes, and request correlation for every registered API route.",
       "dependsOn": [
         "2",
         "3",
@@ -1389,564 +1389,506 @@
       "testType": "integration",
       "package": "api",
       "codeAnalysis": {
-        "approach": "create",
+        "approach": "already-done",
         "existingFiles": [
-          "docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.md"
+          "apps/api/src/app.ts",
+          "apps/api/src/middleware/authentication.ts",
+          "apps/api/src/middleware/csrf.ts",
+          "apps/api/src/middleware/correlation.ts",
+          "apps/api/src/middleware/error-handler.ts",
+          "apps/api/src/routes/auth.ts"
         ],
-        "relatedTests": [],
+        "relatedTests": [
+          "apps/api/src/app.integration.test.ts",
+          "apps/api/src/auth/auth.integration.test.ts"
+        ],
         "patterns": [
-          "Every application/API route except health and login requires the sole administrator session.",
-          "The API communicates with workers only through PostgreSQL records and returns promptly after durable mutations."
+          "Public access uses an exact method-and-path allowlist.",
+          "Authenticated browser mutations require session, CSRF, and trusted-origin evidence.",
+          "Errors and logs are normalized and redacted before exposure."
         ],
         "targetFiles": {
-          "modify": [
-            "apps/api/package.json"
-          ],
-          "create": [
-            "apps/api/src/app.ts",
-            "apps/api/src/server.ts",
-            "apps/api/src/middleware/authentication.ts",
-            "apps/api/src/middleware/csrf.ts",
-            "apps/api/src/middleware/correlation.ts",
-            "apps/api/src/middleware/error-handler.ts",
-            "apps/api/src/routes/auth.ts",
-            "apps/api/src/routes/health.ts",
-            "apps/api/src/health/health-service.ts",
-            "apps/api/src/testing/api-fixture.ts",
-            "apps/api/src/app.integration.test.ts"
-          ]
+          "modify": [],
+          "create": []
         }
       },
       "acceptance": [
-        "Only login and redacted health endpoints are unauthenticated; every other registered application or API route rejects missing, expired, revoked, or invalid sessions.",
-        "Every browser mutation rejects invalid CSRF/origin evidence and all mutations receive correlation and idempotency context where applicable.",
-        "Login/logout use the authentication service and safe cookie lifecycle without returning raw session values in response bodies or logs.",
-        "Errors use documented typed envelopes, correct HTTP status, safe next actions, and correlation IDs without stack traces or secrets in production.",
-        "Health distinguishes API liveness, database readiness, worker heartbeat/capacity, Autopilot availability, and GitHub authentication without exposing credentials or arbitrary command output.",
-        "The API test harness uses isolated database state and fake adapters and detects any accidentally unprotected route."
+        "Only login and redacted liveness/readiness endpoints are public; every other registered route rejects missing, invalid, expired, and revoked sessions.",
+        "Every browser mutation rejects missing or invalid CSRF evidence and rejects an untrusted Origin before executing a domain mutation.",
+        "Login and logout use opaque revocable sessions and safe cookies without returning or logging raw session tokens.",
+        "Every response carries a correlation ID, and production errors use a typed redacted envelope without stack traces or credentials."
       ],
       "tdd": {
         "test": {
-          "description": "Write an API route-matrix integration test first for public login/health, authentication on every other route, CSRF on mutations, cookie login/logout, error envelopes, correlation, redacted health dependencies, and isolated fixtures.",
+          "description": "Maintain a registered-route matrix in apps/api/src/app.integration.test.ts covering public routes, all protected methods, session states, CSRF/origin failures, correlation, and safe errors.",
           "file": "apps/api/src/app.integration.test.ts",
           "passes": true
         },
         "implement": {
-          "description": "Implement the Hono app/server factory, middleware, auth and health routes, dependency injection, typed response helpers, and test fixture.",
+          "description": "Keep route protection default-deny and route all authentication, CSRF, correlation, cookie, and error behavior through the shared API middleware.",
           "passes": true
         },
         "refactor": {
-          "description": "Make route protection default-deny, centralize request context and safe error mapping, and rerun the complete registered-route matrix.",
+          "description": "Keep public-route declarations centralized and remove route-specific authentication or error behavior that duplicates middleware.",
           "passes": true
         }
       },
       "verification": [
-        "Enumerate all registered routes and run unauthorized and CSRF assertions against each relevant method.",
-        "Run liveness/readiness tests with each dependency healthy and unhealthy.",
-        "Inspect production error and health snapshots for secret or stack leakage."
+        "Run the API registered-route authentication and CSRF matrix.",
+        "Inspect representative login, unauthorized, validation, and internal-error responses for correlation and secret redaction."
       ],
       "passes": true
     },
     {
       "id": "22",
       "category": "integration",
-      "description": "Expose authenticated project, release, feature, task, approval, cancellation, retry, and PR-retry mutation APIs with validation and backend idempotency.",
+      "description": "Expose truthful production liveness and readiness for the API, database, worker capacity, Autopilot runtime, and GitHub authentication.",
       "dependsOn": [
-        "13",
+        "21",
+        "36",
+        "38"
+      ],
+      "testType": "integration",
+      "package": "api",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "apps/api/src/main.ts",
+          "apps/api/src/health/health-service.ts",
+          "apps/api/src/routes/health.ts",
+          "apps/worker/src/runtime/worker-registration.ts"
+        ],
+        "relatedTests": [
+          "apps/api/src/app.integration.test.ts",
+          "apps/api/src/health/health-service.test.ts"
+        ],
+        "patterns": [
+          "Health details are typed, redacted, and dependency-specific.",
+          "Worker readiness is derived from persisted registrations and bounded heartbeat age."
+        ],
+        "targetFiles": {
+          "modify": [
+            "apps/api/src/main.ts",
+            "apps/api/src/health/health-service.ts",
+            "apps/api/src/app.integration.test.ts"
+          ],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "Liveness reports only whether the API process can serve requests and does not depend on external services.",
+        "Readiness separately reports database access, a fresh worker heartbeat with capacity and active-job counts, and Autopilot runtime availability.",
+        "GitHub readiness verifies authentication even when no project is registered and reports repository access separately when a project is available.",
+        "An unhealthy required dependency makes readiness unhealthy while returning only bounded redacted details."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Add production-probe tests for zero-project GitHub auth, project repository access, stale/missing worker registration, worker capacity, database failure, and Autopilot failure.",
+          "file": "apps/api/src/app.integration.test.ts",
+          "passes": false
+        },
+        "implement": {
+          "description": "Separate GitHub authentication from optional project access and make every readiness dependency report truthful typed details.",
+          "passes": false
+        },
+        "refactor": {
+          "description": "Centralize probe result shaping and verify no probe returns command output or credentials.",
+          "passes": false
+        }
+      },
+      "verification": [
+        "Run readiness with each dependency independently healthy and unhealthy.",
+        "Run readiness with zero registered projects and an invalid GitHub session.",
+        "Inspect health JSON for credentials and arbitrary adapter output."
+      ],
+      "passes": false
+    },
+    {
+      "id": "23",
+      "category": "functional",
+      "description": "Provide validated and ownership-safe project, release, and feature mutation APIs.",
+      "dependsOn": [
+        "5",
+        "6",
+        "7",
+        "8",
+        "21"
+      ],
+      "testType": "integration",
+      "package": "api",
+      "codeAnalysis": {
+        "approach": "already-done",
+        "existingFiles": [
+          "apps/api/src/routes/projects.ts",
+          "apps/api/src/routes/releases.ts",
+          "apps/api/src/routes/features.ts",
+          "packages/domain/src/project/project-service.ts",
+          "packages/domain/src/release/release-service.ts",
+          "packages/domain/src/feature/feature-service.ts"
+        ],
+        "relatedTests": [
+          "apps/api/src/routes/mutations.integration.test.ts",
+          "packages/domain/src/project/project-service.integration.test.ts",
+          "packages/domain/src/release/release-service.integration.test.ts",
+          "packages/domain/src/feature/feature-service.integration.test.ts"
+        ],
+        "patterns": [
+          "Strict request schemas feed project-scoped domain services.",
+          "Protected edits and archival are rejected while queued or active work exists."
+        ],
+        "targetFiles": {
+          "modify": [],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "Authenticated APIs validate, create, update, and archive projects using canonical workspace, Git, Autopilot, and GitHub checks.",
+        "Authenticated APIs create, update, order, and archive project-owned releases while rejecting cross-project references and active-work conflicts.",
+        "Authenticated APIs create and update project-owned features with project-scoped slugs, deterministic branch context, and lifecycle guards.",
+        "Invalid, stale, cross-project, or unsafe requests return stable redacted errors and leave no partial database mutation."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Maintain API and domain integration tests for valid CRUD, strict schemas, ownership mismatches, protected edits, archival blockers, rollback, and stable errors.",
+          "file": "apps/api/src/routes/mutations.integration.test.ts",
+          "passes": true
+        },
+        "implement": {
+          "description": "Route project, release, and feature mutations through their existing transactional domain services and ownership guards.",
+          "passes": true
+        },
+        "refactor": {
+          "description": "Keep shared validation and ownership checks in one domain implementation rather than duplicating them in route handlers.",
+          "passes": true
+        }
+      },
+      "verification": [
+        "Run project, release, and feature domain integration suites.",
+        "Run API mutation tests for valid, unsafe-path, stale, and cross-project requests."
+      ],
+      "passes": true
+    },
+    {
+      "id": "24",
+      "category": "functional",
+      "description": "Provide the complete task-artifact attach, review, approve, invalidate, remove, replace, and reapprove API lifecycle.",
+      "dependsOn": [
+        "9",
         "14",
-        "15",
+        "21",
+        "23"
+      ],
+      "testType": "integration",
+      "package": "api",
+      "codeAnalysis": {
+        "approach": "already-done",
+        "existingFiles": [
+          "apps/api/src/routes/task-artifacts.ts",
+          "packages/domain/src/task/task-approval-service.ts",
+          "packages/autopilot/src/task/task-schema.ts"
+        ],
+        "relatedTests": [
+          "apps/api/src/routes/mutations.integration.test.ts",
+          "packages/domain/src/task/task-approval-service.integration.test.ts"
+        ],
+        "patterns": [
+          "Task paths are project-relative and resolved through the shared path-security boundary.",
+          "Approval stores an immutable snapshot and checksum while preserving prior attempts."
+        ],
+        "targetFiles": {
+          "modify": [],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "Attach rejects absolute paths, traversal, symlink escape, schema errors, semantic errors, and task files that are neither fresh nor resumable.",
+        "Review returns structured goals, non-goals, requirements, dependencies, acceptance, TDD phases, pass/stuck/invalid state, and blocked reasons.",
+        "Approve requires the displayed checksum and exact project/feature confirmation and atomically stores approval plus one queued attempt.",
+        "Remove, invalidate, replace, and reapprove are exposed only in legal lifecycle states and preserve prior approval and attempt history."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Maintain domain and API tests for path/schema/semantic failures, structured review, checksum mismatch, exact confirmation, lifecycle legality, history preservation, and atomic approval-and-queue.",
+          "file": "apps/api/src/routes/mutations.integration.test.ts",
+          "passes": true
+        },
+        "implement": {
+          "description": "Keep task lifecycle mutations in the transactional task-approval service and expose only lifecycle-valid API commands.",
+          "passes": true
+        },
+        "refactor": {
+          "description": "Reuse the shared task validator and ownership guards for every attach, replacement, and approval path.",
+          "passes": true
+        }
+      },
+      "verification": [
+        "Run task-schema, task-approval, and task mutation integration tests.",
+        "Verify a stale checksum cannot queue work and a legal replacement preserves old attempts."
+      ],
+      "passes": true
+    },
+    {
+      "id": "25",
+      "category": "integration",
+      "description": "Make approve, cancel, development retry, and PR retry HTTP operations durable, promptly returning, and idempotent without executing worker-owned effects in request scope.",
+      "dependsOn": [
+        "18",
         "19",
+        "20",
+        "21",
+        "24"
+      ],
+      "testType": "integration",
+      "package": "api",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "apps/api/src/mutations/idempotency.ts",
+          "apps/api/src/routes/job-actions.ts",
+          "apps/api/src/routes/pr-actions.ts",
+          "apps/api/src/main.ts",
+          "apps/worker/src/process/retry-service.ts"
+        ],
+        "relatedTests": [
+          "apps/api/src/routes/mutations.integration.test.ts",
+          "apps/worker/src/process/cancellation-controller.production.integration.test.ts",
+          "apps/worker/src/process/retry-service.production.integration.test.ts"
+        ],
+        "patterns": [
+          "The API persists an operation result or worker intent before returning.",
+          "Operation keys are namespaced and repeated requests replay the original outcome."
+        ],
+        "targetFiles": {
+          "modify": [
+            "apps/api/src/main.ts",
+            "apps/api/src/routes/job-actions.ts",
+            "apps/api/src/routes/pr-actions.ts",
+            "apps/worker/src/main.ts"
+          ],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "Approve, cancel, development retry, and PR retry require stable operation keys plus exact project/feature confirmation where process-affecting.",
+        "Concurrent or repeated requests with the same operation key return the original outcome and create no duplicate attempt, intent, activity, or audit event.",
+        "Queue and action endpoints return within two seconds at target fixture scale and never wait for process signaling, worker claim, Git, or GitHub completion.",
+        "API handlers persist worker-owned commands and do not invoke Autopilot, process-tree, Git, or GitHub effects directly.",
+        "Invalid lifecycle, stale version, unauthorized ownership, unsafe path, or active-process refusal produces no partial mutation."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Add production-boundary tests that fail if job-action routes execute adapters directly, wait for worker effects, or duplicate durable outcomes under concurrent HTTP retry.",
+          "file": "apps/api/src/routes/mutations.integration.test.ts",
+          "passes": true
+        },
+        "implement": {
+          "description": "Persist running cancellation and retry intents for the worker, retain namespaced mutation replay, and remove process-owned effects from API startup composition.",
+          "passes": true
+        },
+        "refactor": {
+          "description": "Use one durable-command/idempotency pattern for all process-affecting actions and centralize exact-target confirmation.",
+          "passes": true
+        }
+      },
+      "verification": [
+        "Race duplicate approve, cancel, development retry, and PR retry requests.",
+        "Assert action latency under seeded scale while worker adapters are deliberately blocked.",
+        "Search production API composition for process signaling, Autopilot runs, Git pushes, or PR creation."
+      ],
+      "passes": true
+    },
+    {
+      "id": "26",
+      "category": "integration",
+      "description": "Expose authoritative persisted overview, attention, activity, project, release, feature, task, attempt, failure, and pull-request read models.",
+      "dependsOn": [
+        "5",
+        "13",
+        "17",
         "20",
         "21"
       ],
       "testType": "integration",
       "package": "api",
       "codeAnalysis": {
-        "approach": "create",
+        "approach": "already-done",
         "existingFiles": [
-          "docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.md"
+          "apps/api/src/queries/overview-query.ts",
+          "apps/api/src/queries/feature-detail-query.ts",
+          "apps/api/src/routes/overview.ts",
+          "apps/api/src/routes/project-reads.ts",
+          "apps/api/src/routes/release-reads.ts",
+          "apps/api/src/routes/feature-reads.ts",
+          "apps/api/src/routes/attention.ts",
+          "apps/api/src/routes/activity.ts"
         ],
-        "relatedTests": [],
+        "relatedTests": [
+          "apps/api/src/queries/read-projections.test.ts",
+          "apps/api/src/routes/reads.integration.test.ts"
+        ],
         "patterns": [
-          "HTTP handlers validate typed input and delegate to domain services; they do not update feature state or run jobs/processes in request scope.",
-          "Approval, cancellation, retry, and PR operations require stable idempotency and optimistic lifecycle guards."
+          "PostgreSQL projections are authoritative; the browser never reconstructs durable state from live events alone.",
+          "Feeds use stable cursor pagination, UTC values, and newest-first ordering."
         ],
         "targetFiles": {
-          "modify": [
-            "apps/api/src/app.ts"
-          ],
-          "create": [
-            "apps/api/src/routes/projects.ts",
-            "apps/api/src/routes/releases.ts",
-            "apps/api/src/routes/features.ts",
-            "apps/api/src/routes/task-artifacts.ts",
-            "apps/api/src/routes/job-actions.ts",
-            "apps/api/src/routes/pr-actions.ts",
-            "apps/api/src/routes/mutations.integration.test.ts"
-          ]
+          "modify": [],
+          "create": []
         }
       },
       "acceptance": [
-        "Authenticated APIs create/validate/update/archive projects, create/update/archive releases, and create/update features using strict request schemas and domain ownership guards.",
-        "Task attach/remove/replace, approval confirmation, Approve & Queue Development, cancellation, development retry, and PR-creation retry expose only lifecycle-valid domain commands.",
-        "Approval includes the displayed checksum and all process-affecting actions include the exact project/feature plus an explicit confirmation signal.",
-        "Duplicate operation keys or HTTP retries return the original mutation outcome and cannot create duplicate attempts, PR intents, activities, or audits.",
-        "Queueing returns within two seconds under the target fixture scale and never waits for claim or process completion.",
-        "Handlers cannot invoke AutopilotRunner, GitGateway, or GitHubGateway effects directly; durable records are the API-to-worker boundary.",
-        "Invalid, unauthorized, stale-version, cross-project, or unsafe-path requests return stable redacted errors and make no partial mutation."
+        "Overview returns all required portfolio counts and explicitly development-scoped merged metrics.",
+        "Attention derives every specified category from persisted state, excludes healthy waits, supports filters, and returns one primary action with complete context.",
+        "Feature and attempt detail reconstruct task progress, attempt timing/ownership/history, bounded diagnostics, failure, pull-request state, and recent activity.",
+        "Project, release, feature, and activity reads use stable pagination, newest-first ordering where applicable, and UTC timestamps."
       ],
       "tdd": {
         "test": {
-          "description": "Write authenticated API integration tests first for every mutation's valid and invalid lifecycle, request schema, checksum/version, ownership, confirmation, idempotency, rollback, prompt response, and proof that no external adapter runs in request scope.",
-          "file": "apps/api/src/routes/mutations.integration.test.ts",
-          "passes": true
-        },
-        "implement": {
-          "description": "Implement typed Hono mutation routes that pass actor/correlation/idempotency context into transactional domain services and return documented resource/action responses.",
-          "passes": true
-        },
-        "refactor": {
-          "description": "Consolidate route schema and command-context helpers, keep handlers thin, and rerun duplicate/race and rollback cases.",
-          "passes": true
-        }
-      },
-      "verification": [
-        "Run mutation route tests with duplicate concurrent requests.",
-        "Measure approval/queue response time under seeded target scale.",
-        "Instrument fake adapters and confirm HTTP mutation handlers never call worker-side effects."
-      ],
-      "passes": true
-    },
-    {
-      "id": "23",
-      "category": "integration",
-      "description": "Expose persisted overview, attention, activity, project, release, feature, task, job, failure, and PR read APIs plus reconnectable server-sent events.",
-      "dependsOn": [
-        "6",
-        "18",
-        "20",
-        "21",
-        "22"
-      ],
-      "testType": "integration",
-      "package": "api",
-      "codeAnalysis": {
-        "approach": "create",
-        "existingFiles": [
-          "docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.md"
-        ],
-        "relatedTests": [],
-        "patterns": [
-          "Overview and feature detail must be rebuildable from PostgreSQL and complete within the target latency at 10 projects, 100 releases, and 500 features.",
-          "SSE is an optimization over persisted REST resources and reconnect uses event identity rather than in-memory truth."
-        ],
-        "targetFiles": {
-          "modify": [
-            "apps/api/src/app.ts"
-          ],
-          "create": [
-            "apps/api/src/queries/overview-query.ts",
-            "apps/api/src/queries/feature-detail-query.ts",
-            "apps/api/src/routes/overview.ts",
-            "apps/api/src/routes/attention.ts",
-            "apps/api/src/routes/activity.ts",
-            "apps/api/src/routes/project-reads.ts",
-            "apps/api/src/routes/release-reads.ts",
-            "apps/api/src/routes/feature-reads.ts",
-            "apps/api/src/routes/events.ts",
-            "apps/api/src/routes/reads.integration.test.ts"
-          ]
-        }
-      },
-      "acceptance": [
-        "Overview returns project count, active and queued jobs, attention count, failed/interrupted jobs, PRs awaiting review, and development-merged feature/release metrics across all projects.",
-        "Attention derives every required category from persisted state, excludes healthy waiting states, supports filters, and returns project/release/feature, reason, age, state, and one primary action.",
-        "Feature/job detail reconstructs approved tasks, current mutable progress, requirement counts/phases/dependencies/blockers, active attempt timing/worker/heartbeat, attempt history, failures, bounded logs, PR status, and recent activity.",
-        "Project/release/detail and global/project activity APIs use stable cursor pagination, newest-first ordering, UTC timestamps, and development-only progress labels.",
-        "SSE emits persisted event IDs, supports reconnect from the last ID, and clients can discard it and reload the identical authoritative REST state after disconnect.",
-        "At least 95 percent of overview and feature-detail reads finish under one second against the target seeded scale on the supported single-server test profile."
-      ],
-      "tdd": {
-        "test": {
-          "description": "Seed isolated PostgreSQL fixtures and write failing read API tests for every projection, filter, pagination cursor, feature/job reconstruction, UTC serialization, bounded logs, SSE reconnect/gaps, REST reconciliation, and target-scale query budgets.",
+          "description": "Maintain projection and API integration tests for every metric, attention category, reconstructed detail field, pagination cursor, ordering rule, and UTC value.",
           "file": "apps/api/src/routes/reads.integration.test.ts",
           "passes": true
         },
         "implement": {
-          "description": "Implement optimized persisted queries and authenticated read/SSE routes with typed contracts, stable pagination, derived attention/progress, and event-ID replay.",
+          "description": "Build read responses only from persisted PostgreSQL projections and bounded diagnostic references.",
           "passes": true
         },
         "refactor": {
-          "description": "Remove N+1 queries, add or adjust evidence-backed indexes, share projection mappers, and rerun target-scale latency plus SSE recovery tests.",
+          "description": "Keep projection mapping pure and share cursor and timestamp conventions across read routes.",
           "passes": true
         }
       },
       "verification": [
-        "Run read API tests against 10 projects, 100 releases, 500 features, and four active jobs.",
-        "Inspect query counts/plans for overview and feature detail.",
-        "Disconnect SSE, create events, reconnect and compare the subsequent REST representation."
+        "Run read-projection and read-route integration suites.",
+        "Discard all browser state and reconstruct a feature and portfolio solely from REST responses."
       ],
       "passes": true
     },
     {
-      "id": "24",
-      "category": "ui",
-      "description": "Create the React/Vite web shell with authenticated routing, typed API client, responsive navigation, accessible foundations, and global data/error handling.",
-      "dependsOn": [
-        "1",
-        "2",
-        "21",
-        "23"
-      ],
-      "testType": "unit",
-      "package": "web",
-      "codeAnalysis": {
-        "approach": "create",
-        "existingFiles": [
-          "docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.md"
-        ],
-        "relatedTests": [],
-        "patterns": [
-          "Desktop navigation has Overview, Attention, Releases, Projects, Activity, and Settings; mobile bottom navigation has at most Home, Attention, Releases, and Projects.",
-          "The default authenticated route is global Overview and all server state reloads through documented APIs."
-        ],
-        "targetFiles": {
-          "modify": [
-            "apps/web/package.json"
-          ],
-          "create": [
-            "apps/web/index.html",
-            "apps/web/vite.config.ts",
-            "apps/web/src/main.tsx",
-            "apps/web/src/app/router.tsx",
-            "apps/web/src/app/app-shell.tsx",
-            "apps/web/src/api/client.ts",
-            "apps/web/src/auth/login-page.tsx",
-            "apps/web/src/auth/auth-provider.tsx",
-            "apps/web/src/components/navigation/desktop-navigation.tsx",
-            "apps/web/src/components/navigation/mobile-navigation.tsx",
-            "apps/web/src/components/feedback/view-state.tsx",
-            "apps/web/src/styles/tokens.css",
-            "apps/web/src/styles/global.css",
-            "apps/web/src/app/app-shell.test.tsx"
-          ]
-        }
-      },
-      "acceptance": [
-        "Unauthenticated navigation renders an accessible login flow and authenticated navigation lands on global Overview rather than a project.",
-        "Desktop exposes the six required destinations and mobile exposes no more than four primary bottom-navigation items while Activity and Settings remain reachable secondarily.",
-        "Project, release, feature, job, and PR routes support consistent breadcrumbs or compact mobile back navigation.",
-        "The typed API client sends credentials, CSRF/idempotency/correlation data as appropriate, handles unauthorized/session expiry, and reconciles server state after errors or SSE disconnect.",
-        "Shared layout and feedback primitives define loading, empty, error, stale, and unauthorized states without relying on color alone.",
-        "Focus management, skip navigation, landmarks, visible focus, semantic headings, and status announcement foundations are keyboard accessible."
-      ],
-      "tdd": {
-        "test": {
-          "description": "Write component/router tests first for login/session routing, default Overview redirect, desktop/mobile navigation limits, secondary destinations, breadcrumbs/back navigation, API auth expiry, all shared view states, focus management, and status announcements.",
-          "file": "apps/web/src/app/app-shell.test.tsx",
-          "passes": false
-        },
-        "implement": {
-          "description": "Implement the Vite React entrypoint, router, authenticated app shell, typed API/auth clients, responsive navigation, design tokens, and accessible shared state components.",
-          "passes": false
-        },
-        "refactor": {
-          "description": "Consolidate route metadata for navigation and breadcrumbs, remove duplicated state markup, and rerun component tests, accessibility checks, typecheck, and lint.",
-          "passes": false
-        }
-      },
-      "verification": [
-        "Run web unit and automated accessibility tests for login and shell.",
-        "Navigate all primary routes by keyboard at desktop and 375-pixel widths.",
-        "Expire a session and verify safe redirect plus announced feedback."
-      ],
-      "passes": false
-    },
-    {
-      "id": "25",
-      "category": "ui",
-      "description": "Build global Overview, full Attention, Activity, and Settings/status experiences from persisted portfolio read models.",
-      "dependsOn": [
-        "6",
-        "23",
-        "24"
-      ],
-      "testType": "unit",
-      "package": "web",
-      "codeAnalysis": {
-        "approach": "create",
-        "existingFiles": [
-          "docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.md"
-        ],
-        "relatedTests": [],
-        "patterns": [
-          "Needs Your Attention is the first primary content section and cards emphasize one owner action over lower-priority noise.",
-          "Global activity is structured cross-project history rather than terminal output."
-        ],
-        "targetFiles": {
-          "modify": [
-            "apps/web/src/app/router.tsx"
-          ],
-          "create": [
-            "apps/web/src/features/overview/overview-page.tsx",
-            "apps/web/src/features/overview/overview-page.test.tsx",
-            "apps/web/src/features/attention/attention-page.tsx",
-            "apps/web/src/features/attention/attention-card.tsx",
-            "apps/web/src/features/attention/attention-page.test.tsx",
-            "apps/web/src/features/activity/activity-page.tsx",
-            "apps/web/src/features/settings/settings-page.tsx",
-            "apps/web/src/components/metrics/summary-card.tsx"
-          ]
-        }
-      },
-      "acceptance": [
-        "Overview renders Needs Your Attention before metrics and activity and identifies project, optional release, feature, reason, age, state, and one primary action on every card.",
-        "Overview metrics show project count, active jobs, queued jobs, attention, failed/interrupted jobs, PRs awaiting review, and development-merged features/releases with explicit development wording.",
-        "The full Attention page filters all required attention categories and links in one interaction to task review, failure detail, or the GitHub PR as appropriate.",
-        "Activity renders cursor-paginated structured events newest first with project/feature context and never displays raw log lines as activity.",
-        "Settings/status shows redacted database, worker capacity/heartbeat, Autopilot, GitHub auth, queue depth, polling lag, and runtime configuration health.",
-        "Every page has useful loading, empty, error, stale, and unauthorized states and refreshes authoritatively after live-update loss."
-      ],
-      "tdd": {
-        "test": {
-          "description": "Write page tests first for attention-first order, every category/action, summary wording/counts, attention filters, activity pagination, redacted settings health, all view states, and REST refresh after simulated SSE loss.",
-          "file": "apps/web/src/features/overview/overview-page.test.tsx",
-          "passes": false
-        },
-        "implement": {
-          "description": "Implement Overview, Attention, Activity, and Settings/status pages and reusable cards against the typed read APIs.",
-          "passes": false
-        },
-        "refactor": {
-          "description": "Share portfolio query/state and card primitives without obscuring page semantics, tighten attention action labels, and rerun unit/a11y tests at narrow and wide layouts.",
-          "passes": false
-        }
-      },
-      "verification": [
-        "Render every attention and non-attention lifecycle fixture.",
-        "Verify attention precedes metrics and activity in DOM and visual order.",
-        "Disconnect live updates and confirm the visible data reconciles through REST."
-      ],
-      "passes": false
-    },
-    {
-      "id": "26",
-      "category": "ui",
-      "description": "Build project registration/validation, project overview, release list/detail, feature planning, editing, and archival owner workflows.",
+      "id": "27",
+      "category": "integration",
+      "description": "Provide authenticated reconnectable server-sent events as a notification channel while preserving REST as the source of truth.",
       "dependsOn": [
         "13",
-        "14",
-        "22",
-        "23",
-        "24"
-      ],
-      "testType": "unit",
-      "package": "web",
-      "codeAnalysis": {
-        "approach": "create",
-        "existingFiles": [
-          "docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.md"
-        ],
-        "relatedTests": [],
-        "patterns": [
-          "Project registration displays each path/Git/branch/Autopilot/gh/GitHub validation result without credentials and saves only after all required checks pass.",
-          "Release planning is the primary organizational workflow and progress means development merged only."
-        ],
-        "targetFiles": {
-          "modify": [
-            "apps/web/src/app/router.tsx"
-          ],
-          "create": [
-            "apps/web/src/features/projects/projects-page.tsx",
-            "apps/web/src/features/projects/project-form.tsx",
-            "apps/web/src/features/projects/project-validation-results.tsx",
-            "apps/web/src/features/projects/project-detail-page.tsx",
-            "apps/web/src/features/projects/project-flow.test.tsx",
-            "apps/web/src/features/releases/releases-page.tsx",
-            "apps/web/src/features/releases/release-detail-page.tsx",
-            "apps/web/src/features/releases/release-form.tsx",
-            "apps/web/src/features/features/feature-form.tsx",
-            "apps/web/src/features/releases/release-flow.test.tsx"
-          ]
-        }
-      },
-      "acceptance": [
-        "The owner can list, add, edit, validate, and archive projects with name, GitHub owner/repository, absolute server path, development branch, optional description, and per-check safe results.",
-        "Project save remains disabled until all required validations pass, duplicate submission is disabled while pending, and backend errors/idempotency remain authoritative.",
-        "Protected edits and archival explain queued/active job blockers and all destructive or process-affecting confirmations name the exact project.",
-        "The owner can list/create/edit/archive project releases and view ordered feature membership, statuses, and development progress without production-ready language.",
-        "The owner can create a feature with title, project-scoped slug, optional summary, PLANNED state, and visible deterministic branch context.",
-        "Tables become readable cards or contained details on narrow screens and every form is labeled, keyboard operable, error-associated, and timezone-correct."
-      ],
-      "tdd": {
-        "test": {
-          "description": "Write project/release/feature component flow tests first for validation check results, save gating, duplicate pending actions, safe errors, protected edits/archive confirmations, release development progress wording, feature PLANNED creation, forms, and narrow card layouts.",
-          "file": "apps/web/src/features/projects/project-flow.test.tsx",
-          "passes": false
-        },
-        "implement": {
-          "description": "Implement project, release, and feature planning pages/forms against typed mutation/read APIs with responsive accessible details and confirmation dialogs.",
-          "passes": false
-        },
-        "refactor": {
-          "description": "Share form mutation and confirmation primitives, preserve explicit entity names and error associations, and rerun keyboard/a11y and mobile component tests.",
-          "passes": false
-        }
-      },
-      "verification": [
-        "Complete project registration with each validation failure and one success using fake APIs.",
-        "Create a release and feature and verify development progress remains zero and wording is correct.",
-        "Exercise edit/archive blockers and confirmations at 375-pixel and desktop widths."
-      ],
-      "passes": false
-    },
-    {
-      "id": "27",
-      "category": "ui",
-      "description": "Build feature task-path attachment, structured task review, checksum-aware approval confirmation, and task replacement/reapproval workflows.",
-      "dependsOn": [
-        "8",
-        "15",
-        "22",
-        "23",
-        "24",
+        "21",
         "26"
       ],
-      "testType": "unit",
-      "package": "web",
+      "testType": "integration",
+      "package": "api",
       "codeAnalysis": {
-        "approach": "create",
+        "approach": "already-done",
         "existingFiles": [
-          "docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.md"
+          "apps/api/src/routes/events.ts",
+          "apps/web/src/api/sse.ts",
+          "apps/web/src/api/use-sse-rest-refresh.ts",
+          "apps/web/src/api/client.ts"
         ],
-        "relatedTests": [],
+        "relatedTests": [
+          "apps/api/src/routes/events.test.ts",
+          "apps/api/src/routes/reads.integration.test.ts",
+          "apps/web/src/api/client.test.ts"
+        ],
         "patterns": [
-          "Owners review parsed task structure rather than raw JSON and one explicit Approve & Queue Development action approves the displayed checksum.",
-          "Raw JSON is secondary diagnostics only and replacement/reapproval rules are lifecycle-aware."
+          "SSE carries persisted event IDs and reconnect cursors.",
+          "Disconnect or event gaps trigger an authoritative REST reload."
         ],
         "targetFiles": {
-          "modify": [
-            "apps/web/src/app/router.tsx"
-          ],
-          "create": [
-            "apps/web/src/features/features/feature-detail-page.tsx",
-            "apps/web/src/features/tasks/task-attachment-form.tsx",
-            "apps/web/src/features/tasks/task-review.tsx",
-            "apps/web/src/features/tasks/requirement-card.tsx",
-            "apps/web/src/features/tasks/approval-confirmation.tsx",
-            "apps/web/src/features/tasks/task-review-flow.test.tsx"
-          ]
+          "modify": [],
+          "create": []
         }
       },
       "acceptance": [
-        "The owner enters a project-relative task path and receives specific safe validation feedback for absolute/traversal/symlink/schema/semantic/fresh-resumable failures.",
-        "Valid review shows feature name/description, goals/non-goals, requirements, dependencies, acceptance, Red/Green/Refactor status, pass/stuck/invalid state, and blocked reason without requiring raw JSON.",
-        "Raw JSON, if shown, is a secondary escaped diagnostic view and cannot edit or rewrite the task artifact.",
-        "Approve & Queue Development requires a confirmation naming project and feature, sends the displayed checksum, disables duplicate submission while pending, and handles stale-checksum response by forcing a refreshed review.",
-        "Legal remove/replace/invalidate/reapprove actions are shown only in allowed lifecycle states and explain preservation of prior approvals and attempt history.",
-        "At 375 pixels requirement/dependency detail stays readable without page-level horizontal scrolling and all status is conveyed with text/icons in addition to color."
+        "The SSE endpoint requires authentication and emits persisted event IDs in order.",
+        "Reconnect accepts the last received event ID and resumes without treating transient heartbeats as durable events.",
+        "A detected event gap or disconnect marks the client stale and triggers a complete REST reconciliation.",
+        "Discarding the event stream and reloading REST returns the same authoritative workflow state."
       ],
       "tdd": {
         "test": {
-          "description": "Write task-review flow tests first for unsafe path errors, complete structured rendering, escaped optional raw JSON, checksum confirmation, stale refresh, duplicate pending prevention, lifecycle replacement/reapproval, status semantics, and 375-pixel layout.",
-          "file": "apps/web/src/features/tasks/task-review-flow.test.tsx",
-          "passes": false
+          "description": "Maintain SSE tests for authentication, ordered event IDs, reconnect, gap detection, heartbeat behavior, disconnect, and identical REST reconciliation.",
+          "file": "apps/api/src/routes/events.test.ts",
+          "passes": true
         },
         "implement": {
-          "description": "Implement feature detail, attachment, structured task/requirement review, approval confirmation, and replacement/reapproval controls using typed APIs.",
-          "passes": false
+          "description": "Keep SSE as a persisted-event notification stream and route client recovery through the typed REST client.",
+          "passes": true
         },
         "refactor": {
-          "description": "Share requirement status/dependency components with progress views, preserve accessible semantics and escaped content, and rerun unit/a11y/mobile tests.",
-          "passes": false
+          "description": "Centralize stale-state and reconnect behavior so individual pages do not implement incompatible event recovery.",
+          "passes": true
         }
       },
       "verification": [
-        "Review fixtures containing dependencies, stuck, invalid, unknown fields, and blocked reasons.",
-        "Change the backend checksum between render and approval and confirm refresh is required.",
-        "Complete attachment and approval using keyboard only at 375-pixel width."
+        "Reconnect from a known event ID and verify no durable event is lost or duplicated in the projection.",
+        "Force a stream gap and confirm the page reloads authoritative REST state."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "28",
       "category": "ui",
-      "description": "Build durable job progress, attempt history, cancellation/retry, failure diagnostics, and GitHub PR/CI/review owner workflows.",
+      "description": "Provide the authenticated React application shell, typed API client, required navigation, route context, and shared accessible feedback foundations.",
       "dependsOn": [
-        "18",
-        "19",
-        "20",
-        "22",
-        "23",
-        "24",
+        "21",
+        "26",
         "27"
       ],
-      "testType": "unit",
+      "testType": "e2e",
       "package": "web",
       "codeAnalysis": {
-        "approach": "create",
+        "approach": "already-done",
         "existingFiles": [
-          "docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.md"
+          "apps/web/src/app/app-shell.tsx",
+          "apps/web/src/app/router.tsx",
+          "apps/web/src/api/client.ts",
+          "apps/web/src/components/feedback/view-state.tsx",
+          "apps/web/src/components/feedback/confirm-dialog.tsx"
         ],
-        "relatedTests": [],
+        "relatedTests": [
+          "apps/web/src/app/app-shell.test.tsx",
+          "apps/web/src/api/client.test.ts",
+          "apps/web/e2e/keyboard-navigation.spec.ts"
+        ],
         "patterns": [
-          "Feature detail distinguishes Console job, Autopilot process, requirement, and GitHub check and rebuilds from persisted snapshots.",
-          "Console links to GitHub for external fixes/review/merge and never exposes a merge action."
+          "The default authenticated route is global Overview.",
+          "Shared components own feedback, confirmation, focus, and status semantics."
         ],
         "targetFiles": {
-          "modify": [
-            "apps/web/src/features/features/feature-detail-page.tsx",
-            "apps/web/src/app/router.tsx"
-          ],
-          "create": [
-            "apps/web/src/features/jobs/job-progress.tsx",
-            "apps/web/src/features/jobs/attempt-history.tsx",
-            "apps/web/src/features/jobs/job-actions.tsx",
-            "apps/web/src/features/jobs/failure-detail.tsx",
-            "apps/web/src/features/jobs/diagnostic-log-excerpt.tsx",
-            "apps/web/src/features/pull-requests/pull-request-status.tsx",
-            "apps/web/src/features/jobs/job-flow.test.tsx"
-          ]
+          "modify": [],
+          "create": []
         }
       },
       "acceptance": [
-        "Active detail shows total/passed/active/stuck/invalid/remaining requirements, dependency/TDD state, queue/start/elapsed time, worker state, last heartbeat/update, active requirement when known, recent structured activity, and bounded diagnostics.",
-        "Stale or disconnected live updates show last update time and automatically reconcile through REST without losing persisted progress.",
-        "Attempt history preserves immutable queued/start/end, status, predecessor, result, logs, and evidence for failed/interrupted/cancelled/succeeded attempts.",
-        "Cancel and retry use explicit confirmations naming project and feature, show pending/escalation/refusal outcomes, and disable duplicate submission while relying on backend idempotency.",
-        "Failure detail presents safe summary, occurrence, affected operation, latest attempt, and recommended next action without credentials or unbounded raw output.",
-        "PR status distinguishes PR creation, current-head CI running/failed, PR review, requested changes, merge detected, and stale synchronization with direct GitHub links.",
-        "No UI route, button, API call, or keyboard action approves or merges a pull request."
+        "Unauthenticated navigation shows login and authenticated navigation lands on global Overview.",
+        "Desktop exposes Overview, Attention, Releases, Projects, Activity, and Settings; mobile exposes at most four primary destinations with secondary access to the rest.",
+        "Project, release, feature, job, and pull-request routes provide consistent breadcrumbs or compact back navigation.",
+        "The typed client sends credentials, CSRF, operation, and correlation context and handles unauthorized, errors, and stale reconciliation.",
+        "Shared foundations provide landmarks, skip navigation, semantic headings, visible focus, status announcements, and loading/empty/error/stale/unauthorized feedback."
       ],
       "tdd": {
         "test": {
-          "description": "Write job flow tests first for structured counts/phases, timing/heartbeat, stale REST reconciliation, immutable attempts, cancellation/retry confirmations and refusal, safe failures/log caps, all PR/CI/review states and links, and proof no merge action renders.",
-          "file": "apps/web/src/features/jobs/job-flow.test.tsx",
-          "passes": false
+          "description": "Maintain component and browser tests for auth routing, all required navigation, breadcrumbs/back behavior, client headers, session expiry, feedback states, landmarks, skip links, headings, and focus.",
+          "file": "apps/web/src/app/app-shell.test.tsx",
+          "passes": true
         },
         "implement": {
-          "description": "Implement job progress/history/actions, failure/log detail, and pull-request status views within feature detail using persisted APIs and optional SSE refresh hints.",
-          "passes": false
+          "description": "Keep routing, navigation, API state, and accessibility primitives centralized in the application shell and shared components.",
+          "passes": true
         },
         "refactor": {
-          "description": "Reuse requirement cards without conflating entity labels, centralize elapsed/stale time with fake-clock tests, and rerun keyboard/a11y plus disconnect cases.",
-          "passes": false
+          "description": "Remove page-specific copies of client, feedback, focus, and navigation behavior.",
+          "passes": true
         }
       },
       "verification": [
-        "Render every job and PR lifecycle fixture and inspect available actions.",
-        "Drop SSE mid-run and confirm progress returns from REST after reconnect.",
-        "Search rendered routes and client calls to confirm merge/approve controls do not exist."
+        "Navigate every registered page as authenticated and unauthenticated users.",
+        "Exercise shared loading, empty, error, stale, and unauthorized components by keyboard."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "29",
       "category": "ui",
-      "description": "Harden all core web journeys for 375x667 mobile use, WCAG 2.2 AA behavior, keyboard operation, local-time display, and complete loading/empty/error/stale/unauthorized feedback.",
+      "description": "Render global Overview, Attention, and Activity from persisted portfolio read models with one-action attention routing.",
       "dependsOn": [
-        "24",
-        "25",
         "26",
         "27",
         "28"
@@ -1954,215 +1896,1281 @@
       "testType": "e2e",
       "package": "web",
       "codeAnalysis": {
-        "approach": "create",
+        "approach": "already-done",
         "existingFiles": [
-          "docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.md"
+          "apps/web/src/features/overview/overview-page.tsx",
+          "apps/web/src/features/attention/attention-page.tsx",
+          "apps/web/src/features/attention/attention-card.tsx",
+          "apps/web/src/features/activity/activity-page.tsx"
         ],
-        "relatedTests": [],
+        "relatedTests": [
+          "apps/web/src/features/overview/overview-page.test.tsx",
+          "apps/web/src/features/attention/attention-page.test.tsx"
+        ],
         "patterns": [
-          "Primary journeys must work at 375x667 with no page-level horizontal scrolling and practical 44x44 tap targets.",
-          "Status cannot depend on color, actions cannot depend on hover/right-click/drag, and browser-local dates retain UTC API values."
+          "Needs Your Attention precedes metrics and activity.",
+          "Attention cards expose exactly one lifecycle-appropriate primary action."
         ],
         "targetFiles": {
-          "modify": [
-            "apps/web/src/styles/global.css",
-            "apps/web/src/styles/tokens.css",
-            "apps/web/src/app/app-shell.tsx"
-          ],
-          "create": [
-            "apps/web/playwright.config.ts",
-            "apps/web/e2e/mobile-accessibility.spec.ts",
-            "apps/web/e2e/keyboard-navigation.spec.ts",
-            "apps/web/src/accessibility/status-announcer.tsx",
-            "apps/web/src/time/local-date-time.tsx",
-            "apps/web/src/time/local-date-time.test.tsx"
-          ]
+          "modify": [],
+          "create": []
         }
       },
       "acceptance": [
-        "Login, portfolio review, project registration, release/feature planning, task attach/review/approval, progress, cancel/retry, failure, and PR-link journeys complete at 375x667 without page-level horizontal scrolling.",
-        "Primary tap targets are at least 44x44 CSS pixels where practical and no critical action requires hover, right-click, drag-and-drop, or desktop-only dialogs.",
-        "Automated accessibility checks find no serious WCAG 2.2 AA violations in core screens and contrast, visible focus, labels, headings, landmarks, and live status are verified.",
-        "Keyboard-only tests complete every primary desktop workflow with logical order, focus placement/restoration, and no focus traps.",
-        "Every data page demonstrates loading, empty, error, stale, and unauthorized feedback and status never relies on color alone.",
-        "UTC API values display in the browser's selected local timezone with unambiguous accessible text while source timestamps remain unchanged.",
-        "Logs remain usable on mobile through safe summaries and copyable/downloadable bounded excerpts."
+        "Overview places Needs Your Attention first and shows complete context plus one primary action on every attention card.",
+        "Overview shows project, active, queued, attention, failed/interrupted, PR-review, and development-merged metrics with development wording.",
+        "Attention filters every specified category and links directly to task review, failure detail, or GitHub as appropriate.",
+        "Activity shows cursor-paginated structured events newest first with project/feature context and never substitutes raw logs."
       ],
       "tdd": {
         "test": {
-          "description": "Add failing Playwright mobile/accessibility and keyboard journey tests plus local-time unit tests before hardening layouts and interactions; include horizontal-overflow, tap-target, axe, focus, status, view-state, and timezone assertions.",
-          "file": "apps/web/e2e/mobile-accessibility.spec.ts",
-          "passes": false
+          "description": "Maintain page tests for attention-first order, every metric and category, action routing, filtering, activity pagination, context, and absence of raw logs.",
+          "file": "apps/web/src/features/overview/overview-page.test.tsx",
+          "passes": true
         },
         "implement": {
-          "description": "Adjust shared and feature UI styles/components, add status announcement and local-time primitives, and fix each tested mobile, keyboard, state-feedback, and accessibility issue without changing domain semantics.",
-          "passes": false
+          "description": "Render the persisted portfolio contracts without deriving competing workflow state in the browser.",
+          "passes": true
         },
         "refactor": {
-          "description": "Consolidate responsive and focus patterns, remove one-off accessibility workarounds, verify color/spacing tokens, and rerun all unit, axe, keyboard, and 375x667 journeys without retries masking flakes.",
-          "passes": false
+          "description": "Share attention labels, action routing, timestamps, and view-state behavior across Overview and Attention.",
+          "passes": true
         }
       },
       "verification": [
-        "Run Playwright at 375x667 and desktop Chromium for all primary journeys.",
-        "Run automated accessibility scans and manual keyboard checks.",
-        "Run timezone tests in at least UTC, a positive offset, and a negative offset."
+        "Render one fixture for every attention category and follow its primary action.",
+        "Page through activity and confirm stable newest-first ordering."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "30",
-      "category": "integration",
-      "description": "Provide production-oriented Docker/Compose deployment, persistent storage and secret mounts, worker tool/workspace isolation, health checks, structured observability, and operator documentation.",
+      "category": "ui",
+      "description": "Render truthful Settings and runtime status using fields actually supplied by production health and observability APIs.",
       "dependsOn": [
-        "17",
-        "20",
-        "21",
-        "23",
-        "29"
+        "22",
+        "28",
+        "40"
       ],
       "testType": "integration",
+      "package": "web",
       "codeAnalysis": {
-        "approach": "create",
+        "approach": "extend",
         "existingFiles": [
-          "CHANGELOG.md",
-          "docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.md"
+          "apps/web/src/features/settings/settings-page.tsx",
+          "apps/api/src/main.ts",
+          "packages/shared/src/observability/metrics.ts"
         ],
-        "relatedTests": [],
+        "relatedTests": [
+          "apps/web/src/features/overview/overview-page.test.tsx",
+          "apps/api/src/app.integration.test.ts",
+          "packages/shared/src/observability/metrics.test.ts"
+        ],
         "patterns": [
-          "The deployment separates web/API, worker, and PostgreSQL; the worker alone needs writable project mounts and global Autopilot/Git/jq/gh/agent tooling.",
-          "PostgreSQL, diagnostic logs, and secrets persist independently and production assumes trusted TLS termination."
+          "Settings consumes the same typed redacted health contract as readiness.",
+          "Unknown is displayed only when a metric is genuinely unavailable, not because producer and consumer field names disagree."
         ],
         "targetFiles": {
           "modify": [
-            "CHANGELOG.md"
+            "apps/api/src/main.ts",
+            "apps/web/src/features/settings/settings-page.tsx",
+            "apps/web/src/features/overview/overview-page.test.tsx"
           ],
-          "create": [
-            "apps/web/Dockerfile",
-            "apps/api/Dockerfile",
-            "apps/worker/Dockerfile",
-            "compose.yaml",
-            ".env.example",
-            ".dockerignore",
-            "tests/deployment/compose-config.test.ts",
-            "packages/shared/src/observability/structured-logger.ts",
-            "packages/shared/src/observability/metrics.ts",
-            "docs/deployment.md",
-            "docs/operations.md"
-          ]
+          "create": []
         }
       },
       "acceptance": [
-        "Compose starts separate web/API, worker, and PostgreSQL services with dependency health checks and persistent database and bounded-diagnostic storage.",
-        "The worker image contains or validates autopilotagent, its configured agent CLI, git, jq, and gh and receives only explicitly configured allowlisted project mounts.",
-        "API/web require no writable access to project source, and the web service never receives host workspace mounts.",
-        "Database credentials, admin bootstrap password, GitHub/agent authentication, and application secrets use environment secret configuration or mounts and are absent from images and example values.",
-        "Health/readiness distinguishes API, database, worker heartbeat/capacity, Autopilot, and GitHub authentication; production configuration documents trusted TLS proxy and Secure cookies.",
-        "Structured logs and metrics include correlation/project/feature/job context, queue depth, active jobs, oldest age, heartbeat age, durations, interruptions, adapter errors, polling lag, and attention counts after redaction.",
-        "Operator docs cover install prerequisites including Bun/autopilotagent initialization, mounts, secrets, migrations, startup, backup, recovery, cancellation/interruption, and safe upgrades."
+        "Settings shows redacted database, worker heartbeat/capacity/active jobs, Autopilot, and GitHub authentication status from production health.",
+        "Settings shows queue depth, oldest queued age, and GitHub polling lag from production observability data using one documented contract.",
+        "Healthy, degraded, stale, and unavailable values are distinguishable with text and accessible status semantics.",
+        "Refreshing after event loss reloads authoritative health rather than retaining fixture-only values."
       ],
       "tdd": {
         "test": {
-          "description": "Write deployment configuration tests first to parse Compose/Dockerfiles and assert service separation, health dependencies, persistent volumes, explicit worker-only workspace mounts, tool checks, non-root/runtime expectations, secret handling, and absence of project mounts from web.",
-          "file": "tests/deployment/compose-config.test.ts",
+          "description": "Add a production-contract test that feeds the real health payload to Settings and asserts every required value, degraded state, and REST refresh.",
+          "file": "apps/web/src/features/overview/overview-page.test.tsx",
           "passes": false
         },
         "implement": {
-          "description": "Add Dockerfiles, Compose, safe example configuration, structured logging/metrics, health wiring, deployment/operations documentation, and a dated changelog entry.",
+          "description": "Add missing production health/metrics fields and align Settings with the shared typed contract.",
           "passes": false
         },
         "refactor": {
-          "description": "Minimize image/runtime privileges and duplicated configuration, validate secret-safe defaults and explicit mounts, then build images and run deployment tests plus service health checks.",
+          "description": "Remove fixture-only health field assumptions and share status formatting with Overview.",
           "passes": false
         }
       },
       "verification": [
-        "Run docker compose config and the deployment configuration test suite.",
-        "Build all images and start a clean stack with disposable secrets and workspace fixtures.",
-        "Inspect mounts, image history, logs, health responses, and metrics for credential or unrestricted workspace exposure."
+        "Render Settings from the production health response, not a hand-written superset fixture.",
+        "Verify queue depth and polling lag change when the underlying persisted/runtime measurements change."
       ],
       "passes": false
     },
     {
       "id": "31",
-      "category": "integration",
-      "description": "Prove the complete Phase 1 owner journey, durability, concurrency, security, Git/PR idempotency, mobile behavior, performance, critical coverage, and all release quality gates.",
+      "category": "ui",
+      "description": "Provide project registration/validation, project overview, release management, and feature planning owner workflows.",
       "dependsOn": [
-        "9",
-        "10",
-        "11",
-        "12",
-        "13",
-        "14",
-        "15",
-        "16",
-        "17",
-        "18",
-        "19",
-        "20",
-        "22",
         "23",
-        "29",
-        "30"
+        "28"
       ],
       "testType": "e2e",
+      "package": "web",
       "codeAnalysis": {
-        "approach": "create",
+        "approach": "already-done",
         "existingFiles": [
-          "docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.md"
+          "apps/web/src/features/projects/project-form.tsx",
+          "apps/web/src/features/projects/projects-page.tsx",
+          "apps/web/src/features/releases/releases-page.tsx",
+          "apps/web/src/app/form-pages.tsx"
         ],
-        "relatedTests": [],
+        "relatedTests": [
+          "apps/web/src/features/projects/project-flow.test.tsx",
+          "apps/web/src/app/form-pages.test.tsx"
+        ],
         "patterns": [
-          "Phase 1 begins with existing repositories/tasks and ends only when an externally merged feature PR is detected on the configured development branch.",
-          "Critical-path suites cannot be skipped or flaky and timing uses fake clocks or event synchronization rather than arbitrary sleeps."
+          "Project validation is a separate server request and gates save.",
+          "Destructive confirmations name the exact project and explain active-work blockers."
         ],
         "targetFiles": {
-          "modify": [
-            "package.json",
-            "bunfig.toml"
-          ],
-          "create": [
-            "tests/e2e/phase-1-owner-journey.spec.ts",
-            "tests/e2e/durability-and-restart.spec.ts",
-            "tests/integration/concurrency-and-idempotency.test.ts",
-            "tests/integration/security-boundaries.test.ts",
-            "tests/performance/portfolio-reads.test.ts",
-            "tests/fixtures/fake-external-adapters.ts",
-            "tests/fixtures/phase-1-seed.ts"
-          ]
+          "modify": [],
+          "create": []
         }
       },
       "acceptance": [
-        "An unauthenticated visitor sees no portfolio data or mutations, while the sole administrator completes login and logout with revocable secure session behavior.",
-        "The full register project, create release/feature, attach/review/approve tasks, queue, develop, PR, CI, review, external merge, and merge-detected journey passes with fake external adapters and exact audit/activity reconstruction.",
-        "Approval returns promptly; closing/restarting browser and API does not stop work; restarting/reconciling workers preserves or safely interrupts ownership according to policy.",
-        "Four projects run concurrently, a fifth waits, same-project work never overlaps, duplicate approvals/retries/cancellations/pushes/PR creates remain single, and stale observations never overwrite newer state.",
-        "Success with all tasks passing creates one branch/PR; zero exit with stuck/invalid/unpassed tasks creates no PR; cancellation and interruption preserve evidence and require verified explicit retry.",
-        "Path traversal, symlink escape, repository mismatch, unrelated dirty worktree, duplicate process/PR, PID reuse, credential redaction, CSRF, session expiry, and stale poll security tests all pass.",
-        "Portfolio and feature reads meet the 95-percent-under-one-second target at 10 projects, 100 releases, 500 features, and four active jobs on the supported profile.",
-        "All primary journeys pass at desktop and 375 pixels with automated accessibility and keyboard assertions and no PR merge action.",
-        "Critical domain, queue, path-security, process-control, and adapter modules each meet at least 90 percent branch coverage.",
-        "Workspace typecheck, lint, unit, integration, process, Git, API, browser end-to-end, coverage, production build, migration, and deployment checks pass with no skipped critical test or detected flake."
+        "The owner can list, add, edit, validate, and archive projects with every required field and per-check safe validation result.",
+        "Project save remains disabled until all required checks pass, pending submission is disabled, and backend errors remain authoritative.",
+        "Protected edits and archival identify the exact project and explain queued or active blockers.",
+        "The owner can list, create, edit, order, and archive releases and see ordered feature membership with development-only progress language.",
+        "The owner can create a PLANNED feature with title, project-scoped slug, optional summary, and deterministic branch context."
       ],
       "tdd": {
         "test": {
-          "description": "Write the full owner-journey E2E test first, then durability/restart, concurrency/idempotency, security-boundary, and target-scale performance tests; run them before final integration wiring and verify they expose at least one missing cross-boundary behavior.",
-          "file": "tests/e2e/phase-1-owner-journey.spec.ts",
+          "description": "Maintain project/release/feature form tests for validation gating, duplicate submission, backend errors, exact confirmations, blockers, ordering, wording, and branch context.",
+          "file": "apps/web/src/features/projects/project-flow.test.tsx",
+          "passes": true
+        },
+        "implement": {
+          "description": "Keep owner forms wired to the typed mutation APIs and server validation results.",
+          "passes": true
+        },
+        "refactor": {
+          "description": "Share labeled form controls, pending behavior, validation result presentation, and exact-target confirmation.",
+          "passes": true
+        }
+      },
+      "verification": [
+        "Complete project validation and save, then create a release and feature.",
+        "Attempt protected edits and archival with queued and running fixtures."
+      ],
+      "passes": true
+    },
+    {
+      "id": "32",
+      "category": "ui",
+      "description": "Provide task-path attachment, structured task review, checksum approval, invalidation, replacement, and reapproval owner workflows.",
+      "dependsOn": [
+        "24",
+        "28"
+      ],
+      "testType": "e2e",
+      "package": "web",
+      "codeAnalysis": {
+        "approach": "already-done",
+        "existingFiles": [
+          "apps/web/src/features/tasks/task-review.tsx",
+          "apps/web/src/features/tasks/requirement-card.tsx",
+          "apps/web/src/features/features/feature-detail-page.tsx"
+        ],
+        "relatedTests": [
+          "apps/web/src/features/tasks/task-review-flow.test.tsx"
+        ],
+        "patterns": [
+          "Structured task data is primary; escaped raw JSON is diagnostic only.",
+          "Approval posts the checksum currently displayed to the owner."
+        ],
+        "targetFiles": {
+          "modify": [],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "Path entry displays specific safe feedback for absolute, traversal, symlink, schema, semantic, and freshness failures.",
+        "Review displays goals, non-goals, requirements, dependencies, acceptance, TDD phases, pass/stuck/invalid state, and blocked reasons without raw JSON.",
+        "Approve names the exact project and feature, sends the displayed checksum, disables duplicate submission, and forces refresh on stale checksum.",
+        "Remove, invalidate, replace, and reapprove actions appear only in legal states and explain preservation of approval and attempt history."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Maintain task-review flow tests for every validation error, structured field, exact approval payload, stale refresh, pending state, legal actions, and history messaging.",
+          "file": "apps/web/src/features/tasks/task-review-flow.test.tsx",
+          "passes": true
+        },
+        "implement": {
+          "description": "Render and mutate task lifecycle only through the typed task APIs and shared requirement cards.",
+          "passes": true
+        },
+        "refactor": {
+          "description": "Keep task status semantics and lifecycle-action visibility in shared models rather than duplicating state checks.",
+          "passes": true
+        }
+      },
+      "verification": [
+        "Attach and approve a valid task, then force a stale checksum and verify refresh.",
+        "Exercise legal and illegal task replacement states."
+      ],
+      "passes": true
+    },
+    {
+      "id": "33",
+      "category": "ui",
+      "description": "Render durable development progress, immutable attempt history, cancellation/retry controls, and safe failure diagnostics.",
+      "dependsOn": [
+        "26",
+        "27",
+        "28"
+      ],
+      "testType": "e2e",
+      "package": "web",
+      "codeAnalysis": {
+        "approach": "already-done",
+        "existingFiles": [
+          "apps/web/src/features/jobs/job-progress.tsx",
+          "apps/web/src/features/jobs/attempt-history.tsx",
+          "apps/web/src/features/jobs/job-actions.tsx",
+          "apps/web/src/features/jobs/failure-detail.tsx",
+          "apps/web/src/features/jobs/diagnostic-log-excerpt.tsx",
+          "apps/web/src/features/features/feature-detail-page.tsx"
+        ],
+        "relatedTests": [
+          "apps/web/src/features/jobs/job-flow.test.tsx",
+          "apps/web/src/features/jobs/diagnostic-log-excerpt.test.tsx"
+        ],
+        "patterns": [
+          "Progress is reconstructed from persisted snapshots and attempts.",
+          "Diagnostics are bounded and redacted before display, copy, or download."
+        ],
+        "targetFiles": {
+          "modify": [],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "Active detail shows requirement counts/state, dependency/TDD state, timing, worker/heartbeat, active requirement, activity, and bounded diagnostics.",
+        "Stale or disconnected progress shows last update time and reconciles through REST.",
+        "Attempt history preserves queued/start/end, status, predecessor, result, logs, and evidence for every attempt outcome.",
+        "Cancel and retry confirmations name the exact project and feature, disable duplicate submission, and display pending, escalation, refusal, or replay outcomes.",
+        "Failure detail shows a safe summary, time, operation, latest attempt, and recommended next action without credentials or unbounded output."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Maintain job-flow tests for every progress field, stale reconciliation, immutable attempt outcome, exact action payload, pending/refusal/replay feedback, bounded logs, and failure redaction.",
+          "file": "apps/web/src/features/jobs/job-flow.test.tsx",
+          "passes": true
+        },
+        "implement": {
+          "description": "Render persisted job contracts and send action commands through the typed idempotent API client.",
+          "passes": true
+        },
+        "refactor": {
+          "description": "Share elapsed time, local time, requirement cards, confirmations, and diagnostic handling across job views.",
+          "passes": true
+        }
+      },
+      "verification": [
+        "Render queued, running, stale, failed, interrupted, cancelled, and succeeded attempts.",
+        "Exercise cancel and retry dialogs with success, replay, escalation, and refusal responses."
+      ],
+      "passes": true
+    },
+    {
+      "id": "34",
+      "category": "ui",
+      "description": "Render pull-request creation, current-head CI, review, requested-change, merge, blocked, and stale-sync status with GitHub links and no merge capability.",
+      "dependsOn": [
+        "20",
+        "26",
+        "27",
+        "28"
+      ],
+      "testType": "e2e",
+      "package": "web",
+      "codeAnalysis": {
+        "approach": "already-done",
+        "existingFiles": [
+          "apps/web/src/features/pull-requests/pull-request-status.tsx",
+          "apps/web/src/features/features/feature-detail-page.tsx"
+        ],
+        "relatedTests": [
+          "apps/web/src/features/jobs/job-flow.test.tsx"
+        ],
+        "patterns": [
+          "GitHub remains the only place where the owner reviews or merges.",
+          "Mutable PR observations are displayed separately from immutable PR identity."
+        ],
+        "targetFiles": {
+          "modify": [],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "Status distinguishes PR creation, CI running, CI failed, PR review, requested changes, merged, closed-without-merge, and stale synchronization.",
+        "Current head SHA and last synchronization time are shown when available.",
+        "Every owner action is a direct GitHub link or an idempotent PR-retry command.",
+        "No route, component, API client method, keyboard action, or accessible control approves or merges a pull request."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Maintain PR-status tests for every observation state, current-head metadata, stale state, GitHub links, retry, and an explicit absence-of-approve/merge control assertion.",
+          "file": "apps/web/src/features/jobs/job-flow.test.tsx",
+          "passes": true
+        },
+        "implement": {
+          "description": "Render persisted PR identity and observations with GitHub deep links only.",
+          "passes": true
+        },
+        "refactor": {
+          "description": "Centralize PR labels and ensure no generic action component can introduce approve or merge behavior.",
+          "passes": true
+        }
+      },
+      "verification": [
+        "Render every PR/CI/review state and follow its GitHub link.",
+        "Search web and API surfaces for approve or merge commands."
+      ],
+      "passes": true
+    },
+    {
+      "id": "35",
+      "category": "ui",
+      "description": "Apply complete loading, empty, error, stale, unauthorized, local-time, non-color, and narrow-screen behavior to every data page.",
+      "dependsOn": [
+        "28",
+        "29",
+        "30",
+        "31",
+        "32",
+        "33",
+        "34"
+      ],
+      "testType": "e2e",
+      "package": "web",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "apps/web/src/components/feedback/view-state.tsx",
+          "apps/web/src/time/local-date-time.tsx",
+          "apps/web/src/styles/global.css",
+          "apps/web/e2e/mobile-accessibility.spec.ts"
+        ],
+        "relatedTests": [
+          "apps/web/src/time/local-date-time.test.tsx",
+          "apps/web/e2e/mobile-accessibility.spec.ts"
+        ],
+        "patterns": [
+          "Reusable feedback and local-time components prevent page-specific inconsistencies.",
+          "Narrow layouts transform tables and contain diagnostic overflow without page-level scrolling."
+        ],
+        "targetFiles": {
+          "modify": [
+            "apps/web/src/features",
+            "apps/web/e2e/mobile-accessibility.spec.ts"
+          ],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "Every data page has executable tests for loading, empty, error, stale, and unauthorized states.",
+        "Every status conveys meaning with text or an accessible name in addition to color.",
+        "Every UTC API timestamp renders in the selected browser timezone with unambiguous accessible text while source values remain unchanged.",
+        "Every core page at 375x667 avoids page-level horizontal scrolling; tables become cards or contained detail and bounded logs remain copyable/downloadable."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Create a route/state matrix test covering all five feedback states, local-time rendering, non-color status, 375x667 overflow, responsive tables, and mobile logs for every data page.",
+          "file": "apps/web/e2e/mobile-accessibility.spec.ts",
           "passes": false
         },
         "implement": {
-          "description": "Add only the integration wiring and cross-boundary corrections needed for the new end-to-end suites, seed/fake adapter harnesses, performance profile, and enforced per-critical-module coverage gates to pass.",
+          "description": "Fill page-level feedback, local-time, status-semantic, and responsive-layout gaps using shared components.",
           "passes": false
         },
         "refactor": {
-          "description": "Remove duplicated test harness and integration glue, fix every flaky or timing-sensitive test with events/fake clocks, run the entire quality matrix repeatedly, and leave no skipped critical-path test or placeholder.",
+          "description": "Replace remaining page-specific state and timestamp formatting with shared primitives.",
           "passes": false
         }
       },
       "verification": [
-        "Run the full owner journey from a clean migrated database and disposable repositories through external merge detection.",
-        "Run restart, four-worker race, duplicate-effect, cancellation, interruption, and stale-poll suites repeatedly.",
-        "Run bun run typecheck, bun run lint, bun run test, bun run coverage, bun run build, migration checks, and deployment checks with all thresholds enforced."
+        "Execute the complete route/state matrix at desktop and 375x667.",
+        "Run timezone tests with UTC, negative, and positive offsets.",
+        "Measure document scroll width on every core narrow-screen route."
+      ],
+      "passes": false
+    },
+    {
+      "id": "36",
+      "category": "integration",
+      "description": "Compose the production development worker to claim and run up to four different-project jobs concurrently while enforcing one active job per project.",
+      "dependsOn": [
+        "15",
+        "16",
+        "17",
+        "18"
+      ],
+      "testType": "integration",
+      "package": "worker",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "apps/worker/src/main.ts",
+          "apps/worker/src/development/development-worker.ts",
+          "packages/database/src/queue/development-queue.ts",
+          "apps/worker/src/runtime/worker-registration.ts"
+        ],
+        "relatedTests": [
+          "apps/worker/src/development/development-worker.integration.test.ts",
+          "packages/database/src/queue/development-queue.integration.test.ts"
+        ],
+        "patterns": [
+          "PostgreSQL queue claims enforce global capacity and project exclusion.",
+          "Worker registration heartbeats report actual active ownership."
+        ],
+        "targetFiles": {
+          "modify": [
+            "apps/worker/src/main.ts",
+            "apps/worker/src/runtime/worker-registration.ts"
+          ],
+          "create": [
+            "apps/worker/src/runtime/worker-runtime.integration.test.ts"
+          ]
+        }
+      },
+      "acceptance": [
+        "One production worker process can own and execute four attempts from four different projects concurrently.",
+        "A fifth eligible attempt remains queued until one active slot is released.",
+        "Two attempts for the same project never overlap even when multiple workers race.",
+        "Worker registration and readiness report the actual active-job count and configured capacity throughout claim, execution, and release.",
+        "A failed job does not stop the production loop from processing later eligible jobs."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Write a production-runtime integration test with controllable runs proving four concurrent projects, a waiting fifth, same-project exclusion, accurate heartbeat counts, and continued processing after failure.",
+          "file": "apps/worker/src/runtime/worker-runtime.integration.test.ts",
+          "passes": true
+        },
+        "implement": {
+          "description": "Replace the sequential runOnce loop with a bounded concurrent supervisor backed by queue claims and accurate worker registration heartbeats.",
+          "passes": true
+        },
+        "refactor": {
+          "description": "Separate slot supervision, claim polling, active-run tracking, and shutdown so ownership cleanup is deterministic.",
+          "passes": true
+        }
+      },
+      "verification": [
+        "Start five controllable jobs across five projects and observe exactly four running.",
+        "Queue two jobs for one project and confirm only one owns a process.",
+        "Inspect worker health while active counts rise and fall."
+      ],
+      "passes": true
+    },
+    {
+      "id": "37",
+      "category": "integration",
+      "description": "Compose worker-owned running cancellation, cancellation escalation, safe retry, and orphan reconciliation end to end.",
+      "dependsOn": [
+        "19",
+        "25",
+        "36"
+      ],
+      "testType": "integration",
+      "package": "worker",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "apps/worker/src/process/cancellation-controller.ts",
+          "apps/worker/src/process/retry-service.ts",
+          "apps/worker/src/process/orphan-reconciler.ts",
+          "apps/worker/src/runtime/startup-reconciliation.ts",
+          "apps/worker/src/main.ts"
+        ],
+        "relatedTests": [
+          "apps/worker/src/process/cancellation-controller.production.integration.test.ts",
+          "apps/worker/src/process/retry-service.production.integration.test.ts",
+          "apps/worker/src/runtime/startup-reconciliation.production.integration.test.ts"
+        ],
+        "patterns": [
+          "The owning worker verifies process identity before every signal.",
+          "Cancellation and retry preserve immutable attempt evidence and append audit/activity."
+        ],
+        "targetFiles": {
+          "modify": [
+            "apps/worker/src/main.ts",
+            "apps/api/src/main.ts"
+          ],
+          "create": [
+            "apps/worker/src/runtime/job-command-worker.ts",
+            "apps/worker/src/runtime/job-command-worker.integration.test.ts"
+          ]
+        }
+      },
+      "acceptance": [
+        "A durable CANCEL_REQUESTED command is consumed by the worker that owns the running attempt.",
+        "The worker verifies PID plus start time, sends graceful stop, then bounded terminate and force-kill escalation only while the same process tree remains alive.",
+        "Cancellation reaches CANCELLED and preserves task progress, branch state, logs, process evidence, activity, and audit.",
+        "Retry refuses while a verified related process is alive and otherwise creates one distinct successor attempt that reuses resumable state.",
+        "Expired or lost ownership becomes INTERRUPTED without automatic retry, and startup reconciliation is idempotent."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Write an end-to-end job-command worker test covering durable running cancel, each escalation stage, PID reuse, evidence, retry refusal/success, duplicate commands, and orphan startup replay.",
+          "file": "apps/worker/src/runtime/job-command-worker.integration.test.ts",
+          "passes": true
+        },
+        "implement": {
+          "description": "Compose cancellation and retry command consumption into the worker runtime and remove running process control from API request scope.",
+          "passes": true
+        },
+        "refactor": {
+          "description": "Use one verified process-identity policy across live cancellation, retry refusal, shutdown, and orphan reconciliation.",
+          "passes": true
+        }
+      },
+      "verification": [
+        "Cancel a real controllable running process through the HTTP command and observe worker-owned escalation.",
+        "Attempt retry during a live process and after verified exit.",
+        "Restart reconciliation twice and confirm evidence is not duplicated."
+      ],
+      "passes": true
+    },
+    {
+      "id": "38",
+      "category": "integration",
+      "description": "Compose durable pull-request handoff and scheduled GitHub reconciliation into the production worker runtime.",
+      "dependsOn": [
+        "20",
+        "36"
+      ],
+      "testType": "integration",
+      "package": "worker",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "apps/worker/src/github/pr-handoff-worker.ts",
+          "apps/worker/src/github/pr-reconciliation-worker.ts",
+          "apps/worker/src/github/github-backoff.ts",
+          "apps/worker/src/main.ts"
+        ],
+        "relatedTests": [
+          "apps/worker/src/github/pr-handoff-worker.integration.test.ts",
+          "apps/worker/src/github/pr-reconciliation-worker.integration.test.ts"
+        ],
+        "patterns": [
+          "External Git and GitHub effects begin from persisted intents.",
+          "PR identity is immutable and mutable observations apply monotonically to the current head."
+        ],
+        "targetFiles": {
+          "modify": [
+            "apps/worker/src/main.ts"
+          ],
+          "create": [
+            "apps/worker/src/runtime/github-runtime.integration.test.ts"
+          ]
+        }
+      },
+      "acceptance": [
+        "The production worker consumes DEVELOPMENT_COMPLETE handoff intents, verifies/pushes the branch, reuses an existing matching PR, and persists exactly one PR identity.",
+        "A process crash before or after push or PR creation is reconciled without a duplicate push intent, PR, activity, or audit.",
+        "The production worker polls open Phase 1 PRs at the configured interval with bounded backoff independent of browser sessions.",
+        "Only current-head observations update CI/review state; stale observations never overwrite newer head or state.",
+        "External merge and closed-without-merge are persisted with the specified feature transition, attention, activity, and audit behavior."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Write a production-runtime integration test covering handoff intent consumption, crash replay, existing PR reuse, scheduled polling, backoff, stale observations, external merge, and closed-without-merge.",
+          "file": "apps/worker/src/runtime/github-runtime.integration.test.ts",
+          "passes": true
+        },
+        "implement": {
+          "description": "Run PR handoff and reconciliation schedulers alongside development and job-command workers in apps/worker/src/main.ts.",
+          "passes": true
+        },
+        "refactor": {
+          "description": "Use a shared runtime supervisor for independent durable consumers, bounded polling, error isolation, metrics, and shutdown.",
+          "passes": true
+        }
+      },
+      "verification": [
+        "Complete a production-composed development attempt and observe one pushed branch and one PR.",
+        "Restart at each external-effect boundary and confirm idempotent recovery.",
+        "Apply out-of-order GitHub observations and confirm state monotonicity."
+      ],
+      "passes": true
+    },
+    {
+      "id": "39",
+      "category": "integration",
+      "description": "Provide a production Compose stack with isolated services, explicit workspace mounts, durable storage, secret configuration, dependency health checks, and validated worker tools.",
+      "dependsOn": [
+        "22",
+        "36",
+        "37",
+        "38"
+      ],
+      "testType": "integration",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "compose.yaml",
+          "apps/api/Dockerfile",
+          "apps/worker/Dockerfile",
+          "apps/web/Dockerfile",
+          ".env.example",
+          "tests/deployment/compose-config.test.ts"
+        ],
+        "relatedTests": [
+          "tests/deployment/compose-config.test.ts"
+        ],
+        "patterns": [
+          "PostgreSQL, migration, API, worker, and web are separate services.",
+          "Only the worker receives writable allowlisted project mounts."
+        ],
+        "targetFiles": {
+          "modify": [
+            "compose.yaml",
+            "apps/worker/Dockerfile",
+            ".env.example",
+            "tests/deployment/compose-config.test.ts"
+          ],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "Compose starts PostgreSQL, one-shot migrations, API, worker, and web with dependency conditions that use service health or successful completion.",
+        "PostgreSQL data and bounded diagnostics use persistent volumes; credentials and authentication values come from required environment/secret configuration and are absent from images and examples.",
+        "Only explicitly configured allowlisted project paths are writable in the worker; API access is read-only if needed and web receives no project mount.",
+        "The worker image contains or startup-validates autopilotagent, the configured agent CLI, git, jq, and gh.",
+        "PostgreSQL, API, worker, and web have meaningful health checks, and dependent services wait for the health they require."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Extend Compose contract tests to assert worker health, dependency conditions, mount permissions, required secrets, persistent volumes, and tool validation.",
+          "file": "tests/deployment/compose-config.test.ts",
+          "passes": false
+        },
+        "implement": {
+          "description": "Add worker health and finish Compose/image isolation, secret, volume, and tool-validation wiring.",
+          "passes": false
+        },
+        "refactor": {
+          "description": "Centralize runtime configuration names and remove unused secrets or mounts from services.",
+          "passes": false
+        }
+      },
+      "verification": [
+        "Render docker compose config with a documented test environment.",
+        "Build every image and start the complete stack from empty volumes.",
+        "Inspect mounts and environment inside each service and run every health check."
+      ],
+      "passes": false
+    },
+    {
+      "id": "40",
+      "category": "integration",
+      "description": "Wire production observability and provide operator documentation that matches the actual runtime.",
+      "dependsOn": [
+        "22",
+        "36",
+        "37",
+        "38",
+        "39"
+      ],
+      "testType": "integration",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "packages/shared/src/observability/structured-logger.ts",
+          "packages/shared/src/observability/metrics.ts",
+          "packages/shared/src/observability/diagnostic-retention.ts",
+          "apps/api/src/main.ts",
+          "apps/worker/src/main.ts",
+          "docs/deployment.md",
+          "docs/operations.md"
+        ],
+        "relatedTests": [
+          "packages/shared/src/observability/structured-logger.test.ts",
+          "packages/shared/src/observability/metrics.test.ts",
+          "packages/shared/src/observability/diagnostic-retention.test.ts"
+        ],
+        "patterns": [
+          "Observability primitives redact before emission and use bounded storage.",
+          "Operator docs state implemented behavior and explicit limitations without claiming uncomposed flows."
+        ],
+        "targetFiles": {
+          "modify": [
+            "apps/api/src/main.ts",
+            "apps/worker/src/main.ts",
+            "docs/deployment.md",
+            "docs/operations.md"
+          ],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "Structured logs include correlation, project, feature, attempt/job, adapter, and worker context where applicable after redaction.",
+        "Runtime metrics are updated from real operations for queue depth, active jobs, oldest queued age, heartbeat age, durations, interruptions, Git/GitHub errors, polling lag, and attention counts.",
+        "Diagnostic retention enforces documented per-attempt and total limits with explicit truncation while preserving structured progress and audit data.",
+        "Deployment docs cover prerequisites, Bun/autopilotagent initialization, mounts, secrets, migrations, trusted TLS proxy, Secure cookies, startup, and health.",
+        "Operations docs cover backup, restore, cancellation/escalation, interruption, retry, GitHub reconciliation, diagnostics, retention, and safe upgrades exactly as production composition behaves."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Add production-composition tests that drive real runtime events and assert every required log/metric/retention value plus documentation contract checks for all operator procedures.",
+          "file": "packages/shared/src/observability/metrics.test.ts",
+          "passes": false
+        },
+        "implement": {
+          "description": "Update metrics from actual API/worker operations, enrich redacted logs with stable context, and reconcile operator docs with runtime behavior.",
+          "passes": false
+        },
+        "refactor": {
+          "description": "Centralize instrumentation boundaries and remove documentation claims that cannot be traced to production code.",
+          "passes": false
+        }
+      },
+      "verification": [
+        "Run a queued, successful, failed, interrupted, cancelled, Git-error, and GitHub-error flow and inspect metrics/logs.",
+        "Force diagnostic limits and confirm bounded storage plus truncation markers.",
+        "Execute deployment and recovery documentation against a fresh Compose stack."
+      ],
+      "passes": false
+    },
+    {
+      "id": "41",
+      "category": "integration",
+      "description": "Prove the complete owner journey through production-equivalent API and worker composition using fake external executables and adapters.",
+      "dependsOn": [
+        "25",
+        "26",
+        "27",
+        "31",
+        "32",
+        "33",
+        "34",
+        "36",
+        "37",
+        "38"
+      ],
+      "testType": "e2e",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "tests/e2e/phase-1-owner-journey.spec.ts",
+          "tests/fixtures/phase-1-seed.ts",
+          "tests/fixtures/fake-external-adapters.ts"
+        ],
+        "relatedTests": [
+          "tests/e2e/phase-1-owner-journey.spec.ts"
+        ],
+        "patterns": [
+          "The test uses real PostgreSQL and production-equivalent composition with fake process/Git/GitHub boundaries.",
+          "The journey advances through public API commands and durable worker consumers rather than fixture-only helper shortcuts."
+        ],
+        "targetFiles": {
+          "modify": [
+            "tests/e2e/phase-1-owner-journey.spec.ts",
+            "tests/fixtures/phase-1-seed.ts"
+          ],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "An unauthenticated visitor sees no portfolio data or mutations; the sole administrator logs in and out through revocable secure sessions.",
+        "One test completes register project, validate, create release/feature, attach/review/approve, queue, worker development, branch push, one PR, current-head CI running/pass, review, external merge, and merge detection.",
+        "The test uses the same durable command consumers and production worker supervisor as runtime composition, substituting only controlled external adapters/executables.",
+        "Final feature, release, attempt, PR, overview, attention, activity, and audit state exactly reconstructs every meaningful transition and actor.",
+        "The test asserts Console exposes no PR approve or merge action."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Replace fixture-only runDevelopmentOnce/runPrHandoff shortcuts with a production-equivalent supervisor test covering the complete CI and review sequence plus exact state/event/audit assertions.",
+          "file": "tests/e2e/phase-1-owner-journey.spec.ts",
+          "passes": false
+        },
+        "implement": {
+          "description": "Expose dependency-injected production runtime composition for the owner-journey fixture and fill missing lifecycle wiring.",
+          "passes": false
+        },
+        "refactor": {
+          "description": "Keep external fakes controllable while sharing production command, queue, handoff, polling, and reconciliation code.",
+          "passes": false
+        }
+      },
+      "verification": [
+        "Run the owner journey from an empty isolated schema.",
+        "Compare final activity and audit sequences with every expected transition and actor.",
+        "Repeat the journey to detect state leakage or duplicate external effects."
+      ],
+      "passes": false
+    },
+    {
+      "id": "42",
+      "category": "integration",
+      "description": "Prove browser, API, and worker restart durability with actual component replacement and persisted ownership policy.",
+      "dependsOn": [
+        "36",
+        "37",
+        "38",
+        "41"
+      ],
+      "testType": "e2e",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "tests/e2e/durability-and-restart.spec.ts",
+          "apps/worker/src/runtime/startup-reconciliation.ts"
+        ],
+        "relatedTests": [
+          "tests/e2e/durability-and-restart.spec.ts",
+          "apps/worker/src/runtime/startup-reconciliation.production.integration.test.ts"
+        ],
+        "patterns": [
+          "A restart test disposes and recreates the component under test against the same database.",
+          "Running ownership is either preserved by a live worker or becomes safely interrupted; it is never silently relaunched."
+        ],
+        "targetFiles": {
+          "modify": [
+            "tests/e2e/durability-and-restart.spec.ts",
+            "tests/fixtures/phase-1-seed.ts"
+          ],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "Closing and recreating a browser/session leaves queued and running work unchanged and reconstructable from persisted APIs.",
+        "Stopping and recreating the API process while a worker runs does not stop or duplicate the attempt.",
+        "Stopping and recreating a worker applies lease/process policy: live owned work remains singular or expired ownership becomes INTERRUPTED with evidence and no automatic retry.",
+        "Restart during Git push, PR creation, or GitHub polling reconciles to one external effect and monotonic state.",
+        "Every restart assertion is unconditional and waits on bounded state transitions rather than accepting multiple unrelated outcomes."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Rewrite durability tests to dispose/recreate browser, API, and worker components and restart at development, cancellation, push, PR-create, and poll boundaries.",
+          "file": "tests/e2e/durability-and-restart.spec.ts",
+          "passes": false
+        },
+        "implement": {
+          "description": "Add restartable test composition and fix any ownership or persisted-intent gaps exposed by real component replacement.",
+          "passes": false
+        },
+        "refactor": {
+          "description": "Centralize bounded state waiters and component lifecycle helpers; remove simulated restart comments and conditional assertions.",
+          "passes": false
+        }
+      },
+      "verification": [
+        "Demonstrate the API and worker objects/processes are actually disposed and recreated.",
+        "Repeat every restart boundary and confirm one attempt, process, push, and PR.",
+        "Search the suite for conditional success assertions or multi-state allowances."
+      ],
+      "passes": false
+    },
+    {
+      "id": "43",
+      "category": "integration",
+      "description": "Prove runtime concurrency, same-project exclusion, operation idempotency, and stale-observation protection through real queue and worker behavior.",
+      "dependsOn": [
+        "25",
+        "36",
+        "37",
+        "38"
+      ],
+      "testType": "integration",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "tests/integration/concurrency-and-idempotency.test.ts",
+          "packages/database/src/queue/development-queue.integration.test.ts"
+        ],
+        "relatedTests": [
+          "tests/integration/concurrency-and-idempotency.test.ts",
+          "packages/database/src/queue/development-queue.integration.test.ts"
+        ],
+        "patterns": [
+          "Concurrency proof drives queue claims and controllable worker runs instead of assigning RUNNING through direct SQL.",
+          "Idempotency is asserted by both returned outcome and durable row/event counts."
+        ],
+        "targetFiles": {
+          "modify": [
+            "tests/integration/concurrency-and-idempotency.test.ts"
+          ],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "Four controllable attempts from four projects run simultaneously and a fifth remains queued until a slot opens.",
+        "Two attempts for one project never own overlapping worker processes under a real claim race.",
+        "Duplicate approvals, cancellations, development retries, pushes, and PR creates each return one durable outcome with one corresponding effect.",
+        "Concurrent different operation keys obey lifecycle rules without partial or duplicate state.",
+        "Stale feature versions, task checksums, process observations, and GitHub poll observations cannot overwrite newer state."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Replace direct-SQL RUNNING simulation with controllable production worker claims and add the fifth-waits, duplicate-effect, and stale-observation cases.",
+          "file": "tests/integration/concurrency-and-idempotency.test.ts",
+          "passes": false
+        },
+        "implement": {
+          "description": "Fix runtime supervision, durable operation uniqueness, and monotonic writes exposed by the real concurrency tests.",
+          "passes": false
+        },
+        "refactor": {
+          "description": "Use reusable barriers and bounded events for deterministic races without sleeps.",
+          "passes": false
+        }
+      },
+      "verification": [
+        "Observe four live controllable processes and a queued fifth.",
+        "Race every idempotent operation and count attempts, intents, activities, audits, pushes, and PRs.",
+        "Replay stale versions and observations after newer writes."
+      ],
+      "passes": false
+    },
+    {
+      "id": "44",
+      "category": "integration",
+      "description": "Prove the complete Phase 1 security boundary with exact failures and no conditionally skipped assertions.",
+      "dependsOn": [
+        "12",
+        "14",
+        "16",
+        "19",
+        "20",
+        "21",
+        "23",
+        "24",
+        "25"
+      ],
+      "testType": "integration",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "tests/integration/security-boundaries.test.ts",
+          "packages/git/src/git-safety.integration.test.ts",
+          "apps/worker/src/process/cancellation-controller.integration.test.ts"
+        ],
+        "relatedTests": [
+          "tests/integration/security-boundaries.test.ts",
+          "packages/git/src/git-safety.integration.test.ts",
+          "apps/worker/src/process/cancellation-controller.integration.test.ts"
+        ],
+        "patterns": [
+          "Security tests assert exact stable error codes and prove no mutation/effect occurred.",
+          "Every fixture setup must succeed before testing the intended boundary; setup failure is never treated as acceptable security behavior."
+        ],
+        "targetFiles": {
+          "modify": [
+            "tests/integration/security-boundaries.test.ts"
+          ],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "Exact tests reject workspace traversal, symlink escape, absolute/traversing task paths, repository mismatch, and unrelated dirty worktrees without mutation.",
+        "Exact tests prevent duplicate process and duplicate PR identity and refuse signaling on PID reuse.",
+        "Credential redaction covers headers, cookies, URLs, tokens, nested values, logs, errors, activity, audit, and health.",
+        "Missing/invalid CSRF or Origin, missing/expired/revoked session, and cross-project mutation return the documented status/code and no mutation.",
+        "A genuine stale row version, stale checksum, stale process observation, and stale GitHub poll each fail to overwrite newer state.",
+        "No test hides its assertion behind conditional setup success or accepts unrelated status codes."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Rewrite the security matrix with mandatory successful setup, exact status/error codes, no-mutation/effect assertions, and all path/Git/process/PR/session/CSRF/staleness cases.",
+          "file": "tests/integration/security-boundaries.test.ts",
+          "passes": false
+        },
+        "implement": {
+          "description": "Fix any domain, API, Git, process, or reconciliation boundary exposed by the exact matrix.",
+          "passes": false
+        },
+        "refactor": {
+          "description": "Share secure fixture builders and exact error assertions; remove conditional branches and broad not-success assertions.",
+          "passes": false
+        }
+      },
+      "verification": [
+        "Search the security suite for conditional setup branches and broad not-to-be-success assertions.",
+        "For every rejection, assert database and fake external-effect counts remain unchanged.",
+        "Run each security test alone and as part of the full suite."
+      ],
+      "passes": false
+    },
+    {
+      "id": "45",
+      "category": "integration",
+      "description": "Prove portfolio and feature-detail read performance at the documented Phase 1 scale.",
+      "dependsOn": [
+        "26"
+      ],
+      "testType": "integration",
+      "package": "api",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "tests/performance/portfolio-reads.test.ts",
+          "apps/api/src/queries/overview-query.ts",
+          "apps/api/src/queries/feature-detail-query.ts"
+        ],
+        "relatedTests": [
+          "tests/performance/portfolio-reads.test.ts"
+        ],
+        "patterns": [
+          "The supported profile uses real PostgreSQL with deterministic seed size and measured warm reads.",
+          "The assertion reports sample count and p95 rather than only extending test timeout."
+        ],
+        "targetFiles": {
+          "modify": [
+            "tests/performance/portfolio-reads.test.ts"
+          ],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "The fixture contains exactly 10 projects, 100 releases, 500 non-archived features, and four active jobs.",
+        "At least 95 percent of authenticated Overview reads complete in under one second on the documented supported single-server profile.",
+        "At least 95 percent of authenticated feature-detail reads complete in under one second on the same profile.",
+        "The test records sample count, warm-up policy, p95 values, database profile, and failure diagnostics without using a longer test timeout as the performance assertion."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Make the performance suite self-validating for exact seed cardinality, documented profile, warm-up, sample count, and explicit p95 calculations for both endpoints.",
+          "file": "tests/performance/portfolio-reads.test.ts",
+          "passes": false
+        },
+        "implement": {
+          "description": "Optimize projections/indexes only where measured p95 exceeds the target.",
+          "passes": false
+        },
+        "refactor": {
+          "description": "Keep performance seed and measurement utilities deterministic and separate from functional assertions.",
+          "passes": false
+        }
+      },
+      "verification": [
+        "Run against the documented PostgreSQL profile and save p95 output.",
+        "Verify exact fixture cardinality before measuring.",
+        "Repeat the suite to detect material variance."
+      ],
+      "passes": false
+    },
+    {
+      "id": "46",
+      "category": "ui",
+      "description": "Prove every primary owner journey at desktop and 375x667 with real keyboard operation and automated WCAG 2.2 AA checks.",
+      "dependsOn": [
+        "31",
+        "32",
+        "33",
+        "34",
+        "35",
+        "41"
+      ],
+      "testType": "e2e",
+      "package": "web",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "apps/web/e2e/mobile-accessibility.spec.ts",
+          "apps/web/e2e/keyboard-navigation.spec.ts",
+          "apps/web/playwright.config.ts"
+        ],
+        "relatedTests": [
+          "apps/web/e2e/mobile-accessibility.spec.ts",
+          "apps/web/e2e/keyboard-navigation.spec.ts"
+        ],
+        "patterns": [
+          "A journey test completes the mutation and verifies its result; opening a page or dialog is not completion.",
+          "Accessibility uses a standards-based engine plus explicit keyboard, focus, contrast, and live-region assertions."
+        ],
+        "targetFiles": {
+          "modify": [
+            "apps/web/e2e/mobile-accessibility.spec.ts",
+            "apps/web/e2e/keyboard-navigation.spec.ts",
+            "apps/web/package.json"
+          ],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "Login, portfolio review, project registration, release/feature creation, task attach/review/approval, progress, cancellation, retry, failure, and PR-link journeys complete at 375x667 without page-level horizontal scrolling.",
+        "Keyboard-only tests complete every primary desktop workflow with logical order, visible focus, dialog focus placement/restoration, and no focus trap.",
+        "A standards-based automated accessibility scan reports no serious WCAG 2.2 AA violations on every core screen and includes color-contrast rules.",
+        "Primary tap targets are at least 44x44 where practical and no critical action requires hover, right-click, drag, or desktop-only interaction.",
+        "The browser suite asserts no Console PR approve or merge action."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Replace presence-only mobile and keyboard checks with completed workflow assertions and add a standards-based axe-compatible WCAG 2.2 AA scan including contrast.",
+          "file": "apps/web/e2e/mobile-accessibility.spec.ts",
+          "passes": false
+        },
+        "implement": {
+          "description": "Fix responsive, focus, keyboard, labeling, contrast, live-region, and tap-target failures found by the complete journeys and scanner.",
+          "passes": false
+        },
+        "refactor": {
+          "description": "Share journey fixtures and accessibility assertions without weakening rules or hiding violations.",
+          "passes": false
+        }
+      },
+      "verification": [
+        "Run desktop and 375x667 Playwright projects.",
+        "Review the accessibility scanner output for every core route.",
+        "Complete each workflow without a mouse and verify focus restoration."
+      ],
+      "passes": false
+    },
+    {
+      "id": "47",
+      "category": "integration",
+      "description": "Enforce at least 90 percent branch coverage independently for every named critical module.",
+      "dependsOn": [
+        "23",
+        "24",
+        "25",
+        "26",
+        "36",
+        "37",
+        "38",
+        "44"
+      ],
+      "testType": "integration",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "scripts/check-critical-coverage.ts",
+          "bunfig.toml",
+          "package.json"
+        ],
+        "relatedTests": [
+          "packages/domain/src/**/*.test.ts",
+          "packages/database/src/**/*.integration.test.ts",
+          "apps/worker/src/**/*.test.ts",
+          "packages/git/src/**/*.test.ts",
+          "packages/github/src/**/*.test.ts",
+          "packages/autopilot/src/**/*.test.ts"
+        ],
+        "patterns": [
+          "Coverage is checked per critical module, so highly covered files cannot mask an uncovered module.",
+          "Database-backed and process-backed branches run in the default critical coverage command."
+        ],
+        "targetFiles": {
+          "modify": [
+            "scripts/check-critical-coverage.ts",
+            "package.json",
+            "bunfig.toml"
+          ],
+          "create": []
+        }
+      },
+      "acceptance": [
+        "The gate lists each critical domain, queue, path-security, process-control, Git, GitHub, and Autopilot adapter module explicitly.",
+        "Every listed module reports at least 90 percent branch coverage; aggregate package coverage cannot substitute for a low module.",
+        "The coverage command provisions or documents its required PostgreSQL/process fixtures and returns nonzero when any required suite cannot execute.",
+        "No skipped or conditionally disabled critical test contributes to a passing coverage gate."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Add missing branch tests for every below-threshold module and a gate self-test proving absent coverage, skipped tests, or an unavailable required fixture fails the command.",
+          "file": "scripts/check-critical-coverage.ts",
+          "passes": false
+        },
+        "implement": {
+          "description": "Complete critical branch tests and make the coverage command execute all required fixtures deterministically.",
+          "passes": false
+        },
+        "refactor": {
+          "description": "Keep the critical module manifest centralized and remove redundant tests without reducing behavioral coverage.",
+          "passes": false
+        }
+      },
+      "verification": [
+        "Run bun run coverage:critical and inspect every module percentage.",
+        "Temporarily omit one critical suite and confirm the gate fails.",
+        "Search critical suites for skip, todo, or conditional execution."
+      ],
+      "passes": false
+    },
+    {
+      "id": "48",
+      "category": "integration",
+      "description": "Provide one reproducible Phase 1 release-qualification command that passes every required code, database, process, browser, migration, image, and deployment gate without skipped critical tests.",
+      "dependsOn": [
+        "39",
+        "40",
+        "41",
+        "42",
+        "43",
+        "44",
+        "45",
+        "46",
+        "47"
+      ],
+      "testType": "e2e",
+      "codeAnalysis": {
+        "approach": "extend",
+        "existingFiles": [
+          "package.json",
+          "README.md",
+          "tests/architecture/workspace.test.ts",
+          "tests/deployment/compose-config.test.ts"
+        ],
+        "relatedTests": [
+          "tests/architecture/workspace.test.ts",
+          "tests/deployment/compose-config.test.ts"
+        ],
+        "patterns": [
+          "Release qualification is a gate that depends on feature requirements; it does not duplicate them.",
+          "The command fails closed when PostgreSQL, process tools, browser binaries, Docker, migrations, or critical contracts are unavailable."
+        ],
+        "targetFiles": {
+          "modify": [
+            "package.json",
+            "README.md",
+            "tests/architecture/workspace.test.ts",
+            "tests/deployment/compose-config.test.ts"
+          ],
+          "create": [
+            "scripts/verify-phase-1.ts"
+          ]
+        }
+      },
+      "acceptance": [
+        "One documented command runs workspace typecheck, lint, unit tests, database integration tests, process/Git/API tests, browser E2E, critical coverage, production builds, migrations, image builds, Compose validation, and deployment smoke checks.",
+        "The command provisions or verifies every required dependency and fails with an actionable message instead of silently skipping a gate.",
+        "No critical installed-CLI, database, process, browser, migration, image, or deployment test is skipped or opt-in when Phase 1 qualification is claimed.",
+        "The command succeeds twice consecutively from a clean documented environment with no detected flake.",
+        "The requirement ledger, README, deployment guide, operations guide, and changelog report the same qualification status."
+      ],
+      "tdd": {
+        "test": {
+          "description": "Add a release-gate contract test that verifies the qualification command invokes every named gate and fails when any gate is missing, skipped, unavailable, or failing.",
+          "file": "tests/architecture/workspace.test.ts",
+          "passes": false
+        },
+        "implement": {
+          "description": "Create the reproducible Phase 1 qualification command, dependency checks, and aligned status documentation.",
+          "passes": false
+        },
+        "refactor": {
+          "description": "Reuse workspace scripts without duplicate execution and produce a concise machine-readable gate summary.",
+          "passes": false
+        }
+      },
+      "verification": [
+        "Run the qualification command twice from the documented environment.",
+        "Break each gate one at a time and confirm the command fails closed.",
+        "Compare completion status across the ledger and all operator-facing documents."
       ],
       "passes": false
     }

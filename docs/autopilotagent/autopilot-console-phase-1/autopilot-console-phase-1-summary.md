@@ -1,43 +1,36 @@
 # Autopilotagent Session Summary
 
 ## Results
-- Completed: 23 requirements total (this session: 1)
+- Completed: 1 requirement in this batch (38)
 - Stuck: 0 requirements
 - Invalid tests: 0 requirements
-- Remaining: 8 requirements
+- Remaining: open requirements still present (22, 30, 35, 39–48 and others per task JSON)
 
 ## Completed Requirements
-- [23] Expose authoritative overview, attention, activity, project, release,
-  feature, task, job, failure, and PR read projections plus reconnectable
-  persisted-event SSE.
+- [38] Compose durable pull-request handoff and scheduled GitHub reconciliation into the production worker runtime.
 
 ## Stuck Requirements
-- None.
+- none
 
 ## Commits Made
-- 5315a7a feat(api): complete persisted read and SSE projections (req 23)
+- a077386 feat(worker): compose durable PR handoff and GitHub reconciliation runtime (req 38 GREEN)
+- (refactor commit follows in same session)
 
 ## Files Modified
-- apps/api/src/auth/auth.integration.test.ts
-- apps/api/src/queries/feature-detail-query.ts
-- apps/api/src/queries/overview-query.ts
-- apps/api/src/queries/read-projections.test.ts
-- apps/api/src/routes/attention.ts
-- apps/api/src/routes/events.ts
-- apps/api/src/routes/events.test.ts
-- apps/api/src/routes/feature-reads.ts
-- apps/api/src/routes/reads.integration.test.ts
+- apps/worker/src/runtime/github-runtime.ts
+- apps/worker/src/runtime/github-runtime.integration.test.ts
+- apps/worker/src/github/pr-handoff-store.ts
+- apps/worker/src/github/pr-reconciliation-store.ts
+- apps/worker/src/github/pr-reconciliation-worker.ts
+- apps/worker/src/main.ts
+- apps/worker/src/index.ts
+- packages/database/src/repositories/workflow-repositories.ts
+- packages/database/src/index.ts
+- tests/fixtures/phase-1-seed.ts
 - docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.json
 - docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1-notes.md
-- docs/autopilotagent/autopilot-console-phase-1/analytics/2026-07-29-autopilot-console-phase-1-1.json
-
-## Verification
-- API typecheck and lint: passed
-- API tests: 138 passed, 0 failed
-- Read/SSE integration tests: 38 passed, 0 failed
-- Target-scale portfolio performance tests: 7 passed, 0 failed
-- Diff check: passed
+- docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1-summary.md
 
 ## Next Steps
-- Resume with: `/autopilotagent docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.json --start-from 24`
-- Next workable requirement: 24
+- Resume with: /autopilotagent docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.json --batch 1
+- Next workable candidates include 22 (unblocked by 38), 44, and 45.
