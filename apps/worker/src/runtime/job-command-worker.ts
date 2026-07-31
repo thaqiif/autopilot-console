@@ -14,11 +14,7 @@ import type {
 	Sql,
 } from "../../../../packages/database/src/index";
 import { getDevelopmentAttempt, getFeatureById } from "../../../../packages/database/src/index";
-import type {
-	CancellationController,
-	CancelOutcome,
-	ProcessTreeInspector,
-} from "../process/cancellation-controller";
+import type { CancellationController, CancelOutcome } from "../process/cancellation-controller";
 import type { RetryOutcome, RetryRequest, RetryService } from "../process/retry-service";
 
 export type JobCommandCancelOutcome = {
@@ -44,15 +40,14 @@ export interface JobCommandWorker {
 
 export interface JobCommandWorkerOptions {
 	sql: Queryable;
-	workerId: string;
 	workerRegistrationId: string;
 	cancellation: CancellationController;
 	retry: RetryService;
-	tree: ProcessTreeInspector;
 	reconcileOrphans: () => Promise<number>;
+	/** Optional worker id retained for logging/composition identity. */
+	workerId?: string;
 	pollIntervalMs?: number;
 	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
-	now?: () => Date;
 }
 
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -86,6 +81,43 @@ function toHandle(attempt: DevelopmentAttemptRow): AutopilotRunHandle {
 	};
 }
 
+async function loadOwnedCancelRequested(
+	sql: Queryable,
+	attemptId: string,
+	workerRegistrationId: string,
+): Promise<{ attempt: DevelopmentAttemptRow; feature: FeatureRow } | null> {
+	const capable = sql as Sql;
+	if (typeof capable.begin === "function") {
+		return capable.begin(async (tx) => {
+			const [locked] = await tx`
+				SELECT id
+				FROM development_job_attempts
+				WHERE id = ${attemptId}
+					AND status = 'CANCEL_REQUESTED'
+					AND worker_registration_id = ${workerRegistrationId}
+				FOR UPDATE
+			`;
+			if (!locked) return null;
+			const attempt = await getDevelopmentAttempt(tx, attemptId);
+			if (!attempt) return null;
+			const feature = await getFeatureById(tx, attempt.featureId);
+			if (!feature) return null;
+			return { attempt, feature };
+		});
+	}
+
+	const attempt = await getDevelopmentAttempt(sql, attemptId);
+	if (
+		attempt?.status !== "CANCEL_REQUESTED" ||
+		attempt.workerRegistrationId !== workerRegistrationId
+	) {
+		return null;
+	}
+	const feature = await getFeatureById(sql, attempt.featureId);
+	if (!feature) return null;
+	return { attempt, feature };
+}
+
 export function createJobCommandWorker(options: JobCommandWorkerOptions): JobCommandWorker {
 	const pollIntervalMs = options.pollIntervalMs ?? 500;
 	const sleep = options.sleep ?? defaultSleep;
@@ -116,51 +148,16 @@ export function createJobCommandWorker(options: JobCommandWorkerOptions): JobCom
 	}
 
 	async function processOneCancel(attemptId: string): Promise<JobCommandCancelOutcome | null> {
-		const capable = sql as Sql;
-		const attemptAndFeature = await (async (): Promise<{
-			attempt: DevelopmentAttemptRow;
-			feature: FeatureRow;
-		} | null> => {
-			if (typeof capable.begin === "function") {
-				return capable.begin(async (tx) => {
-					const [locked] = await tx`
-						SELECT id
-						FROM development_job_attempts
-						WHERE id = ${attemptId}
-							AND status = 'CANCEL_REQUESTED'
-							AND worker_registration_id = ${options.workerRegistrationId}
-						FOR UPDATE
-					`;
-					if (!locked) return null;
-					const attempt = await getDevelopmentAttempt(tx, attemptId);
-					if (!attempt) return null;
-					const feature = await getFeatureById(tx, attempt.featureId);
-					if (!feature) return null;
-					return { attempt, feature };
-				});
-			}
-			const attempt = await getDevelopmentAttempt(sql, attemptId);
-			if (
-				attempt?.status !== "CANCEL_REQUESTED" ||
-				attempt.workerRegistrationId !== options.workerRegistrationId
-			) {
-				return null;
-			}
-			const feature = await getFeatureById(sql, attempt.featureId);
-			if (!feature) return null;
-			return { attempt, feature };
-		})();
+		const owned = await loadOwnedCancelRequested(sql, attemptId, options.workerRegistrationId);
+		if (!owned) return null;
 
-		if (!attemptAndFeature) return null;
-		const { attempt, feature } = attemptAndFeature;
-
+		const { attempt, feature } = owned;
 		const reason = attempt.cancellationReason ?? "owner requested stop";
 		const operationId = `worker-cancel:${attempt.id}:${attempt.cancellationRequestedAt?.toISOString() ?? "now"}`;
-		const handle = toHandle(attempt);
 		const outcome = await options.cancellation.cancelRunning(
 			attempt,
 			feature,
-			handle,
+			toHandle(attempt),
 			reason,
 			operationId,
 		);

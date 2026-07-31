@@ -116,7 +116,6 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 			workerRegistrationId: registration.id,
 			cancellation,
 			retry,
-			tree: processTree,
 			reconcileOrphans: () => reconcileOrphansAtWorkerStartup(database.sql),
 		});
 		const worker = createDevelopmentWorker({

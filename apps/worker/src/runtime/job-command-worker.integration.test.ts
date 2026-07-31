@@ -280,7 +280,6 @@ function composeWorker(input: {
 		workerRegistrationId: input.workerRegistrationId,
 		cancellation,
 		retry,
-		tree: input.tree,
 		reconcileOrphans: () => reconcileOrphansAtWorkerStartup(sql, { now: () => new Date() }),
 		pollIntervalMs: 10,
 		sleep: async () => {},
@@ -571,7 +570,6 @@ describe("job-command worker composition", () => {
 			workerRegistrationId: seed.workerRegistrationId,
 			cancellation,
 			retry: createRetryService({ sql }),
-			tree: realTree,
 			reconcileOrphans: () => reconcileOrphansAtWorkerStartup(sql),
 			sleep: async () => {},
 		});
