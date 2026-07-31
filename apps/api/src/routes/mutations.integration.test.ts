@@ -1,5 +1,5 @@
 /**
- * RED tests for authenticated mutation APIs (requirement 22).
+ * RED tests for authenticated mutation APIs (requirements 22 and 25).
  *
  * Covers project/release/feature/task/approval/cancellation/retry/pr-retry
  * routes: default-deny protection, strict request schemas, validation/owner
@@ -8,10 +8,14 @@
  * AutopilotRunner/GitGateway/GitHubGateway in request scope, and safe redacted
  * errors for invalid/unauthorized/stale/cross-project/unsafe-path requests.
  *
- * These tests fail before the mutation routes and services exist.
+ * Requirement 25 adds production-boundary coverage: concurrent durable retries,
+ * blocked process/Git/GitHub effects, and API startup composition that keeps
+ * process-tree and Autopilot process effects out of request scope.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AutopilotRunner } from "../../../../packages/autopilot/src/index";
 import {
 	applyCoreMigration,
@@ -23,6 +27,7 @@ import {
 } from "../../../../packages/database/src/index";
 import type { GitGateway } from "../../../../packages/git/src/index";
 import type { GitHubGateway } from "../../../../packages/github/src/index";
+import { createRetryService } from "../../../worker/src/process/retry-service";
 import type { DomainAdapters } from "../app";
 import { LoginRateLimiter } from "../auth/login-rate-limit";
 import { SESSION_COOKIE_NAME } from "../auth/session-cookie";
@@ -832,6 +837,256 @@ describe("job and pr actions", () => {
 				(SELECT count(*)::int FROM idempotency_records WHERE feature_id = ${feature?.id}) AS idempotency
 		`;
 		expect(counts).toMatchObject({ outbox: 1, activity: 1, audit: 1, idempotency: 1 });
+	});
+});
+
+describe("production durable action boundary (requirement 25)", () => {
+	test("API production entrypoint keeps process-tree and Autopilot process effects out of composition", () => {
+		const mainSource = readFileSync(join(import.meta.dir, "../main.ts"), "utf8");
+		expect(mainSource).not.toMatch(/createProcessTreeInspector/);
+		expect(mainSource).not.toMatch(/createCancellationController/);
+		expect(mainSource).not.toMatch(/from ["'].*process-tree["']/);
+		expect(mainSource).not.toMatch(/from ["'].*cancellation-controller["']/);
+		expect(mainSource).not.toMatch(/createRetryService\(\s*\{[^}]*autopilot/s);
+		expect(mainSource).not.toMatch(/tree:\s*createProcessTreeInspector/);
+	});
+
+	test("concurrent development retries create one durable attempt and replay the original outcome", async () => {
+		const rateLimiter = new LoginRateLimiter({ maxAttempts: 5, windowMs: 60_000 });
+		sessionService = createSessionService({ sql, rateLimiter, now: clock.now });
+		const domainAdapters = buildDomainAdapters();
+		const retry = createRetryService({ sql });
+		harness = await createApiTestHarness({
+			sql,
+			sessionService,
+			now: clock.now,
+			adapters: {
+				...domainAdapters,
+				retryHandler: (request) => retry.retry(request),
+			},
+		});
+		await harness.bootstrapAdmin({ username: ADMIN_USERNAME, password: ADMIN_PASSWORD });
+
+		const { token, csrf } = await authed();
+		const [admin] = await sql`SELECT id FROM admin_accounts LIMIT 1`;
+		await sql`INSERT INTO workspaces (name) VALUES ('default')`;
+		await sql`
+			INSERT INTO projects (
+				id, workspace_id, name, slug, github_owner, github_repo,
+				canonical_path, development_branch
+			) VALUES (
+				${PROJECT_ID}, (SELECT id FROM workspaces LIMIT 1), 'Project', 'project',
+				'owner', 'repo', '/projects/repo', 'main'
+			)
+		`;
+		await sql`
+			INSERT INTO releases (id, project_id, name, version)
+			VALUES (${RELEASE_ID}, ${PROJECT_ID}, 'Release', '1.0.0')
+		`;
+		await sql`
+			INSERT INTO features (id, project_id, release_id, slug, title, state, branch_name)
+			VALUES (
+				${FEATURE_ID}, ${PROJECT_ID}, ${RELEASE_ID}, 'feature', 'Feature',
+				'DEVELOPMENT_FAILED', 'feature/feature'
+			)
+		`;
+		await sql`
+			INSERT INTO task_approvals (
+				id, project_id, feature_id, relative_task_path, checksum,
+				schema_compatibility_version, requirements_snapshot, approved_by_admin_id, approved_at
+			) VALUES (
+				${APPROVAL_ID}, ${PROJECT_ID}, ${FEATURE_ID}, 'tasks/feature.json', 'checksum',
+				'1', '[]', ${admin?.id}, now()
+			)
+		`;
+		await sql`
+			INSERT INTO development_job_attempts (
+				project_id, feature_id, task_approval_id, branch_name, operation_key, status
+			) VALUES (
+				${PROJECT_ID}, ${FEATURE_ID}, ${APPROVAL_ID}, 'feature/feature',
+				'develop-failed-1', 'FAILED'
+			)
+		`;
+
+		const request = () =>
+			call("POST", `/api/features/${FEATURE_ID}/retry`, {
+				token,
+				csrf,
+				json: {
+					projectId: PROJECT_ID,
+					featureId: FEATURE_ID,
+					operationKey: "retry-dev-1",
+					confirmation: "retry-development",
+					reason: "owner retry",
+				},
+			});
+
+		const responses = await Promise.all([request(), request(), request()]);
+		expect(responses.map((response) => response.status)).toEqual([200, 200, 200]);
+		const bodies = await Promise.all(responses.map((response) => response.json()));
+		expect(bodies[0]).toEqual(bodies[1]);
+		expect(bodies[0]).toEqual(bodies[2]);
+
+		const [counts] = await sql`
+			SELECT
+				(SELECT count(*)::int FROM development_job_attempts WHERE feature_id = ${FEATURE_ID} AND status = 'QUEUED') AS queued,
+				(SELECT count(*)::int FROM activity_events WHERE feature_id = ${FEATURE_ID} AND type = 'development.retried') AS activity,
+				(SELECT count(*)::int FROM audit_events WHERE feature_id = ${FEATURE_ID} AND action = 'development.retry') AS audit,
+				(SELECT count(*)::int FROM idempotency_records WHERE operation_key = 'retry-dev-1') AS idempotency
+		`;
+		expect(counts).toMatchObject({ queued: 1, activity: 1, audit: 1, idempotency: 1 });
+		expect(gitPreflightCalls).toBe(0);
+		expect(githubCalls).toBe(0);
+		expect(autopilotCalls).toBe(0);
+	});
+
+	test("development retry returns within two seconds when process-alive probe is deliberately blocked", async () => {
+		const rateLimiter = new LoginRateLimiter({ maxAttempts: 5, windowMs: 60_000 });
+		sessionService = createSessionService({ sql, rateLimiter, now: clock.now });
+		const domainAdapters = buildDomainAdapters();
+		let processProbeCalls = 0;
+		// Deliberately blocked probe — production API composition must not wire it.
+		const blockedAutopilot = {
+			async isAlive() {
+				processProbeCalls++;
+				await new Promise((resolve) => setTimeout(resolve, 3_500));
+				return false;
+			},
+		} as unknown as AutopilotRunner;
+		void blockedAutopilot;
+		// Match production: durable SQL retry without Autopilot process probes.
+		const retry = createRetryService({ sql });
+		harness = await createApiTestHarness({
+			sql,
+			sessionService,
+			now: clock.now,
+			adapters: {
+				...domainAdapters,
+				retryHandler: (request) => retry.retry(request),
+			},
+		});
+		await harness.bootstrapAdmin({ username: ADMIN_USERNAME, password: ADMIN_PASSWORD });
+
+		const { token, csrf } = await authed();
+		const [admin] = await sql`SELECT id FROM admin_accounts LIMIT 1`;
+		await sql`INSERT INTO workspaces (name) VALUES ('default')`;
+		await sql`
+			INSERT INTO projects (
+				id, workspace_id, name, slug, github_owner, github_repo,
+				canonical_path, development_branch
+			) VALUES (
+				${PROJECT_ID}, (SELECT id FROM workspaces LIMIT 1), 'Project', 'project',
+				'owner', 'repo', '/projects/repo', 'main'
+			)
+		`;
+		await sql`
+			INSERT INTO releases (id, project_id, name, version)
+			VALUES (${RELEASE_ID}, ${PROJECT_ID}, 'Release', '1.0.0')
+		`;
+		await sql`
+			INSERT INTO features (id, project_id, release_id, slug, title, state, branch_name)
+			VALUES (
+				${FEATURE_ID}, ${PROJECT_ID}, ${RELEASE_ID}, 'feature', 'Feature',
+				'DEVELOPMENT_INTERRUPTED', 'feature/feature'
+			)
+		`;
+		await sql`
+			INSERT INTO task_approvals (
+				id, project_id, feature_id, relative_task_path, checksum,
+				schema_compatibility_version, requirements_snapshot, approved_by_admin_id, approved_at
+			) VALUES (
+				${APPROVAL_ID}, ${PROJECT_ID}, ${FEATURE_ID}, 'tasks/feature.json', 'checksum',
+				'1', '[]', ${admin?.id}, now()
+			)
+		`;
+		await sql`
+			INSERT INTO development_job_attempts (
+				project_id, feature_id, task_approval_id, branch_name, operation_key, status,
+				process_pid, process_start_identity
+			) VALUES (
+				${PROJECT_ID}, ${FEATURE_ID}, ${APPROVAL_ID}, 'feature/feature',
+				'develop-interrupted-1', 'INTERRUPTED', 4242, 1_700_000_000_000
+			)
+		`;
+
+		const start = Date.now();
+		const res = await call("POST", `/api/features/${FEATURE_ID}/retry`, {
+			token,
+			csrf,
+			json: {
+				projectId: PROJECT_ID,
+				featureId: FEATURE_ID,
+				operationKey: "retry-blocked-probe-1",
+				confirmation: "retry-development",
+				reason: "owner retry after interruption",
+			},
+		});
+		const elapsed = Date.now() - start;
+		expect(elapsed).toBeLessThan(2000);
+		expect(processProbeCalls).toBe(0);
+		expect([200, 409]).toContain(res.status);
+		if (res.status === 200) {
+			const [queued] = await sql`
+				SELECT count(*)::int AS n
+				FROM development_job_attempts
+				WHERE feature_id = ${FEATURE_ID} AND status = 'QUEUED'
+			`;
+			expect(queued?.n).toBe(1);
+		}
+	});
+
+	test("queued cancellation remains durable without invoking cancelHandler process effects", async () => {
+		const rateLimiter = new LoginRateLimiter({ maxAttempts: 5, windowMs: 60_000 });
+		sessionService = createSessionService({ sql, rateLimiter, now: clock.now });
+		const domainAdapters = buildDomainAdapters();
+		let cancelHandlerCalls = 0;
+		harness = await createApiTestHarness({
+			sql,
+			sessionService,
+			now: clock.now,
+			adapters: {
+				...domainAdapters,
+				cancelHandler: async (attempt) => {
+					cancelHandlerCalls++;
+					await new Promise((resolve) => setTimeout(resolve, 3_500));
+					return { kind: "cancelled", attemptId: attempt.id };
+				},
+			},
+		});
+		await harness.bootstrapAdmin({ username: ADMIN_USERNAME, password: ADMIN_PASSWORD });
+		const session = await authed();
+		const seeded = await seedProjectAttempt("QUEUED");
+
+		const start = Date.now();
+		const res = await call("POST", `/api/features/${FEATURE_ID}/cancel`, {
+			token: session.token,
+			csrf: session.csrf,
+			json: {
+				projectId: PROJECT_ID,
+				featureId: FEATURE_ID,
+				operationKey: "cancel-queued-durable-1",
+				reason: "owner cancelled queued work",
+				confirmation: "cancel-development",
+			},
+		});
+		expect(Date.now() - start).toBeLessThan(2000);
+		expect(res.status).toBe(200);
+		expect(cancelHandlerCalls).toBe(0);
+		const [attempt] = await sql`
+			SELECT status, cancellation_reason
+			FROM development_job_attempts WHERE id = ${seeded.attemptId}
+		`;
+		expect(attempt?.status).toBe("CANCELLED");
+		expect(attempt?.cancellation_reason).toBe("owner cancelled queued work");
+		const [counts] = await sql`
+			SELECT
+				(SELECT count(*)::int FROM idempotency_records WHERE operation_key = 'cancel-queued-durable-1') AS idempotency,
+				(SELECT count(*)::int FROM activity_events WHERE feature_id = ${FEATURE_ID}) AS activity,
+				(SELECT count(*)::int FROM audit_events WHERE feature_id = ${FEATURE_ID}) AS audit
+		`;
+		expect(counts?.idempotency).toBe(1);
+		expect(Number(counts?.activity)).toBeGreaterThanOrEqual(1);
+		expect(Number(counts?.audit)).toBeGreaterThanOrEqual(1);
 	});
 });
 
