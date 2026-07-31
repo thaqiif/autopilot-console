@@ -1,5 +1,5 @@
 /**
- * Fake external adapters for E2E and integration tests (requirement 31).
+ * Fake external adapters for Phase 1 qualification tests (requirements 41–44).
  *
  * Provides deterministic in-memory implementations of GitGateway, GitHubGateway,
  * and AutopilotRunner so the full owner journey can run without real Git repos,
@@ -149,6 +149,10 @@ export function createFakeGitHub(overrides?: {
 	const state = overrides?.state ?? createFakeGitHubState();
 
 	return {
+		async validateAuthentication() {
+			return { ok: true, authenticated: true, login: "test-owner" };
+		},
+
 		async validateAccess(request: ValidateAccessRequest): Promise<ValidateAccessResult> {
 			if (overrides?.validateAccess) return overrides.validateAccess(request);
 			const key = request.repository.fullName;
@@ -287,8 +291,20 @@ export function createFakeAutopilot(overrides?: {
 			return { ok: true, message: "autopilotagent available", executablePath: "/usr/bin/true" };
 		},
 
-		async validateTask(): Promise<TaskValidation> {
-			return { ok: true, message: "task valid", checksum: "aabbccdd" };
+		async validateTask(projectRoot: string, taskRelativePath: string): Promise<TaskValidation> {
+			try {
+				const { readFile } = await import("node:fs/promises");
+				const { createHash } = await import("node:crypto");
+				const { join } = await import("node:path");
+				const bytes = await readFile(join(projectRoot, taskRelativePath));
+				const checksum = createHash("sha256").update(bytes).digest("hex");
+				return { ok: true, message: "task valid", checksum };
+			} catch (error) {
+				return {
+					ok: false,
+					message: error instanceof Error ? error.message : "task validation failed",
+				};
+			}
 		},
 
 		async start(
@@ -303,7 +319,7 @@ export function createFakeAutopilot(overrides?: {
 				expectedBranch: request.expectedBranch,
 				processIdentity: {
 					pid: 10000 + ++runCounter,
-					startTime: new Date().toISOString(),
+					startTimeMs: Date.now(),
 				},
 				startedAt: new Date().toISOString(),
 			};

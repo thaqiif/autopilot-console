@@ -198,6 +198,10 @@ class ControllableGitHub implements GitHubGateway {
 	statusErrors = new Map<number, Error>();
 	nextPrNumber = 42;
 
+	async validateAuthentication() {
+		return { ok: true, authenticated: true, login: "bot" };
+	}
+
 	async validateAccess(): Promise<ValidateAccessResult> {
 		return {
 			ok: true,

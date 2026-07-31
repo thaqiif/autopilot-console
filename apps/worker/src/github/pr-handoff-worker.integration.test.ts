@@ -30,7 +30,10 @@ interface SeededHandoff {
 	workerId: string;
 }
 
-function seedHandoff(overrides?: { featureState?: string; attemptStatus?: string }): SeededHandoff {
+function seedHandoff(overrides?: {
+	featureState?: string;
+	attemptStatus?: DevelopmentAttemptRow["status"];
+}): SeededHandoff {
 	const projectId = crypto.randomUUID();
 	const featureId = crypto.randomUUID();
 	const attemptId = crypto.randomUUID();
@@ -75,7 +78,7 @@ function seedHandoff(overrides?: { featureState?: string; attemptStatus?: string
 			taskApprovalId: approvalId,
 			branchName: `feature/${featureId}-login`,
 			operationKey: `develop:${attemptId}`,
-			status: (overrides?.attemptStatus as any) ?? "SUCCEEDED",
+			status: overrides?.attemptStatus ?? "SUCCEEDED",
 			predecessorAttemptId: null,
 			workerRegistrationId: crypto.randomUUID(),
 			processPid: 4242,
@@ -332,6 +335,14 @@ class FakeGitHubForHandoff implements GitHubGateway {
 		};
 	}
 
+	async validateAuthentication() {
+		return {
+			ok: this.validateResult.ok,
+			authenticated: this.validateResult.authenticated,
+			login: this.validateResult.login,
+		};
+	}
+
 	async validateAccess() {
 		this.events.push("github.validate-access");
 		if (this.validateError) throw this.validateError;
@@ -401,7 +412,7 @@ function makeHandoffWorker(
 describe("PR handoff worker", () => {
 	test("pushes branch and creates PR, persists identity, transitions to CI_RUNNING", async () => {
 		const seed = seedHandoff();
-		const { worker, store, git, github, events } = makeHandoffWorker(seed);
+		const { worker, store, events } = makeHandoffWorker(seed);
 
 		const outcome = await worker.handoff(seed.attempt.id);
 

@@ -22,4 +22,5 @@ export type {
 	ReviewDecision,
 	ValidateAccessRequest,
 	ValidateAccessResult,
+	ValidateAuthenticationResult,
 } from "./github-gateway";

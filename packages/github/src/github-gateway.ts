@@ -77,6 +77,13 @@ export interface ValidateAccessRequest {
 	projectRoot?: string;
 }
 
+/** Session-level authentication probe (no repository required). */
+export interface ValidateAuthenticationResult {
+	ok: boolean;
+	authenticated: boolean;
+	login: string | null;
+}
+
 export interface ValidateAccessResult {
 	ok: boolean;
 	authenticated: boolean;
@@ -114,6 +121,8 @@ export interface GetPullRequestStatusRequest {
  * approve, merge, or arbitrary gh command templates.
  */
 export interface GitHubGateway {
+	/** Session-level auth check for readiness when no project is registered. */
+	validateAuthentication(): Promise<ValidateAuthenticationResult>;
 	validateAccess(request: ValidateAccessRequest): Promise<ValidateAccessResult>;
 	findExistingPullRequest(request: FindPullRequestRequest): Promise<PullRequestIdentity | null>;
 	createPullRequest(request: CreatePullRequestRequest): Promise<PullRequestIdentity>;

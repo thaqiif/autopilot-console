@@ -176,6 +176,14 @@ class FakeGitHubForReconciliation implements GitHubGateway {
 		this.errors.set(String(prNumber), error);
 	}
 
+	async validateAuthentication() {
+		return {
+			ok: this.validateResult.ok,
+			authenticated: this.validateResult.authenticated,
+			login: this.validateResult.login,
+		};
+	}
+
 	async validateAccess() {
 		return this.validateResult;
 	}

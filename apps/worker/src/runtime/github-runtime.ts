@@ -78,6 +78,7 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
  */
 function createRepositoryResolvingGitHub(sql: Queryable, github: GitHubGateway): GitHubGateway {
 	return {
+		validateAuthentication: () => github.validateAuthentication(),
 		validateAccess: (request) => github.validateAccess(request),
 		findExistingPullRequest: (request) => github.findExistingPullRequest(request),
 		createPullRequest: (request) => github.createPullRequest(request),

@@ -119,9 +119,40 @@ interface GithubHealthAdapter {
 	}): Promise<GithubAccessResult>;
 }
 
-/** Bounded, redacted probe detail — never include credentials or raw adapter text. */
-function probeDetail(detail: Record<string, unknown>): Record<string, unknown> {
-	return detail;
+type ProbeResult = { ok: boolean; detail: Record<string, unknown> };
+
+/** Shape probe details to known boolean/number/string fields only — never adapter text. */
+function shapeProbe(
+	ok: boolean,
+	detail: Record<string, boolean | number | string | null>,
+): ProbeResult {
+	return { ok, detail: { ...detail } };
+}
+
+function inactiveWorkerDetail(): ProbeResult {
+	return shapeProbe(false, {
+		active: false,
+		capacity: 0,
+		activeJobs: 0,
+		availableSlots: 0,
+		lastHeartbeatAt: null,
+	});
+}
+
+function githubDetail(input: {
+	ok: boolean;
+	authenticated: boolean;
+	projectAvailable: boolean;
+	repositoryReadable?: boolean;
+}): ProbeResult {
+	const detail: Record<string, boolean | number | string | null> = {
+		authenticated: input.authenticated,
+		projectAvailable: input.projectAvailable,
+	};
+	if (input.repositoryReadable !== undefined) {
+		detail.repositoryReadable = input.repositoryReadable;
+	}
+	return shapeProbe(input.ok, detail);
 }
 
 export function createProductionHealthProbes(
@@ -136,9 +167,9 @@ export function createProductionHealthProbes(
 			check: async () => {
 				try {
 					await sql`SELECT 1`;
-					return { ok: true, detail: probeDetail({ available: true }) };
+					return shapeProbe(true, { available: true });
 				} catch {
-					return { ok: false, detail: probeDetail({ available: false }) };
+					return shapeProbe(false, { available: false });
 				}
 			},
 		},
@@ -156,16 +187,7 @@ export function createProductionHealthProbes(
 					if (!worker) {
 						metricsCollector.setActiveJobs(0, 0);
 						metricsCollector.setHeartbeatAge(Number.POSITIVE_INFINITY);
-						return {
-							ok: false,
-							detail: probeDetail({
-								active: false,
-								capacity: 0,
-								activeJobs: 0,
-								availableSlots: 0,
-								lastHeartbeatAt: null,
-							}),
-						};
+						return inactiveWorkerDetail();
 					}
 					const capacity = Number(worker.capacity);
 					const activeJobs = Number(worker.active_jobs);
@@ -173,31 +195,18 @@ export function createProductionHealthProbes(
 					const heartbeatAge = Math.max(0, Date.now() - lastHeartbeatAt.getTime());
 					metricsCollector.setActiveJobs(activeJobs, capacity);
 					metricsCollector.setHeartbeatAge(heartbeatAge);
-					return {
-						ok: true,
-						detail: probeDetail({
-							active: true,
-							capacity,
-							activeJobs,
-							availableSlots: Math.max(0, capacity - activeJobs),
-							lastHeartbeatAt: lastHeartbeatAt.toISOString(),
-							heartbeatAge,
-							metrics: metricsCollector.snapshot(),
-						}),
-					};
+					return shapeProbe(true, {
+						active: true,
+						capacity,
+						activeJobs,
+						availableSlots: Math.max(0, capacity - activeJobs),
+						lastHeartbeatAt: lastHeartbeatAt.toISOString(),
+						heartbeatAge,
+					});
 				} catch {
 					metricsCollector.setActiveJobs(0, 0);
 					metricsCollector.setHeartbeatAge(Number.POSITIVE_INFINITY);
-					return {
-						ok: false,
-						detail: probeDetail({
-							active: false,
-							capacity: 0,
-							activeJobs: 0,
-							availableSlots: 0,
-							lastHeartbeatAt: null,
-						}),
-					};
+					return inactiveWorkerDetail();
 				}
 			},
 		},
@@ -206,12 +215,9 @@ export function createProductionHealthProbes(
 			check: async () => {
 				try {
 					const result = await autopilot.validateRuntime();
-					return {
-						ok: result.ok,
-						detail: probeDetail({ available: result.ok }),
-					};
+					return shapeProbe(result.ok, { available: result.ok });
 				} catch {
-					return { ok: false, detail: probeDetail({ available: false }) };
+					return shapeProbe(false, { available: false });
 				}
 			},
 		},
@@ -252,34 +258,21 @@ export function createProductionHealthProbes(
 				}
 
 				if (!project) {
-					if (!authenticated) {
-						return {
-							ok: false,
-							detail: probeDetail({
-								authenticated: false,
-								projectAvailable: false,
-							}),
-						};
-					}
-					return {
-						ok: true,
-						detail: probeDetail({
-							authenticated: true,
-							projectAvailable: false,
-						}),
-					};
+					return githubDetail({
+						ok: authenticated,
+						authenticated,
+						projectAvailable: false,
+					});
 				}
 
 				if (!authenticated) {
 					metricsCollector.incrementAdapterError("github");
-					return {
+					return githubDetail({
 						ok: false,
-						detail: probeDetail({
-							authenticated: false,
-							projectAvailable: true,
-							repositoryReadable: false,
-						}),
-					};
+						authenticated: false,
+						projectAvailable: true,
+						repositoryReadable: false,
+					});
 				}
 
 				const owner = project.github_owner;
@@ -293,24 +286,20 @@ export function createProductionHealthProbes(
 					if (!result.ok || !repositoryReadable) {
 						metricsCollector.incrementAdapterError("github");
 					}
-					return {
+					return githubDetail({
 						ok: result.ok && repositoryReadable,
-						detail: probeDetail({
-							authenticated: result.authenticated === true,
-							projectAvailable: true,
-							repositoryReadable,
-						}),
-					};
+						authenticated: result.authenticated === true,
+						projectAvailable: true,
+						repositoryReadable,
+					});
 				} catch {
 					metricsCollector.incrementAdapterError("github");
-					return {
+					return githubDetail({
 						ok: false,
-						detail: probeDetail({
-							authenticated: true,
-							projectAvailable: true,
-							repositoryReadable: false,
-						}),
-					};
+						authenticated: true,
+						projectAvailable: true,
+						repositoryReadable: false,
+					});
 				}
 			},
 		},

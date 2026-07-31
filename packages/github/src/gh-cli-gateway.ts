@@ -22,6 +22,7 @@ import type {
 	RepositoryRef,
 	ValidateAccessRequest,
 	ValidateAccessResult,
+	ValidateAuthenticationResult,
 } from "./github-gateway";
 import { normalizePullRequestStatus } from "./status-normalizer";
 
@@ -112,11 +113,7 @@ export class GhCliGateway implements GitHubGateway {
 	 * Session-level authentication probe used by readiness when no project
 	 * repository is available. Never returns credentials or raw command output.
 	 */
-	async validateAuthentication(): Promise<{
-		ok: boolean;
-		authenticated: boolean;
-		login: string | null;
-	}> {
+	async validateAuthentication(): Promise<ValidateAuthenticationResult> {
 		const auth = this.#invoke(["auth", "status", "--json", "hosts"]);
 		if (auth.status !== 0) {
 			return { ok: false, authenticated: false, login: null };

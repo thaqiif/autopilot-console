@@ -24,10 +24,12 @@ import {
 	createDevelopmentAttempt,
 	createTaskApproval,
 	createWorkspace,
+	DATABASE_URL,
 	type DatabaseClient,
 	type DatabaseFixture,
 	getProjectById,
 	listAuditEventsForTarget,
+	resetSchema,
 	type Sql,
 } from "../../../database/src/index";
 import type {
@@ -46,10 +48,6 @@ import {
 	type ProjectService,
 	type ProjectValidationResult,
 } from "./project-service";
-
-const DATABASE_URL =
-	process.env.DATABASE_URL ??
-	"postgres://postgres:postgres@autopilot-console-pg:5432/autopilot_console";
 
 let client: DatabaseClient;
 let sql: Sql;
@@ -112,6 +110,9 @@ function createFakeGithub(
 	} = {},
 ): GitHubGateway {
 	return {
+		async validateAuthentication() {
+			return { ok: true, authenticated: true, login: "owner" };
+		},
 		async validateAccess(request) {
 			if (options.validateAccess) return options.validateAccess(request);
 			return {
@@ -217,10 +218,7 @@ async function seedActiveJob(projectId: string): Promise<void> {
 beforeAll(async () => {
 	client = createDatabaseClient(DATABASE_URL);
 	sql = client.sql;
-	await sql.unsafe("DROP SCHEMA IF EXISTS public CASCADE");
-	await sql.unsafe("CREATE SCHEMA public");
-	await sql.unsafe("GRANT ALL ON SCHEMA public TO postgres");
-	await sql.unsafe("GRANT ALL ON SCHEMA public TO public");
+	await resetSchema(sql);
 	await applyCoreMigration(sql);
 	await applyWorkflowMigration(sql);
 
@@ -712,5 +710,148 @@ describe("validation result type export", () => {
 			checks: [],
 		};
 		expect(sample.ok).toBe(false);
+	});
+});
+
+describe("requirement 47 project coverage edges", () => {
+	test("validate rejects invalid repository identity and empty workspace roots path", async () => {
+		const service = makeService();
+		const invalidRepo = await service.validateProject({
+			name: "Bad Repo",
+			slug: "bad-repo",
+			githubOwner: " ",
+			githubRepo: "",
+			workspacePath: projectDir,
+			developmentBranch: "main",
+		});
+		expect(invalidRepo.ok).toBe(false);
+
+		const emptyPath = await service.validateProject({
+			name: "Empty Path",
+			slug: "empty-path",
+			githubOwner: "acme",
+			githubRepo: "empty",
+			workspacePath: "   ",
+			developmentBranch: "main",
+		});
+		expect(emptyPath.ok).toBe(false);
+	});
+
+	test("createProject fails validation for invalid github identity", async () => {
+		const service = makeService();
+		const result = await service.createProject({
+			workspaceId,
+			name: "Invalid GH",
+			slug: "invalid-gh",
+			githubOwner: "",
+			githubRepo: "repo",
+			workspacePath: projectDir,
+			developmentBranch: "main",
+			actor: ACTOR,
+		});
+		expect(result.ok).toBe(false);
+	});
+
+	test("updateProject rejects missing project and archive of missing project", async () => {
+		const service = makeService();
+		const missing = await service.updateProject({
+			projectId: crypto.randomUUID(),
+			name: "Nope",
+			actor: ACTOR,
+		});
+		expect(missing.ok).toBe(false);
+		const archiveMissing = await service.archiveProject({
+			projectId: crypto.randomUUID(),
+			actor: ACTOR,
+		});
+		expect(archiveMissing.ok).toBe(false);
+	});
+
+	test("git preflight throw is reported as failed checks", async () => {
+		const service = createProjectService({
+			sql,
+			workspaceRoots: [projectDir],
+			git: {
+				async preflight() {
+					throw new Error("boom preflight");
+				},
+				async ensureFeatureBranch() {
+					throw new Error("unused");
+				},
+				async observeCommits() {
+					return [];
+				},
+				async pushFeatureBranch() {
+					throw new Error("unused");
+				},
+			},
+			github: {
+				async validateAuthentication() {
+					return { ok: true, authenticated: true, login: "x" };
+				},
+				async validateAccess() {
+					return {
+						ok: true,
+						authenticated: true,
+						login: "x",
+						repositoryReadable: true,
+						pushFeasible: true,
+						failures: [],
+					};
+				},
+				async findExistingPullRequest() {
+					return null;
+				},
+				async createPullRequest() {
+					throw new Error("unused");
+				},
+				async getPullRequestStatus() {
+					throw new Error("unused");
+				},
+			},
+			autopilot: {
+				async validateRuntime() {
+					return { ok: true, message: "ok", executablePath: "/bin/true" };
+				},
+				async validateTask() {
+					return { ok: true, message: "ok", checksum: "x" };
+				},
+				async start() {
+					throw new Error("unused");
+				},
+				async isAlive() {
+					return false;
+				},
+				async signal() {},
+				async wait() {
+					throw new Error("unused");
+				},
+				async readProgress() {
+					return {
+						total: 0,
+						passed: 0,
+						stuck: 0,
+						invalidTest: 0,
+						remaining: 0,
+						allPass: false,
+						blockedReasons: [],
+					};
+				},
+				async observeCommits() {
+					return [];
+				},
+			},
+			now: () => new Date("2026-07-18T12:00:00.000Z"),
+		});
+		const result = await service.validateProject({
+			name: "Throwing Git",
+			slug: "throwing-git",
+			githubOwner: "acme",
+			githubRepo: "throw",
+			workspacePath: projectDir,
+			developmentBranch: "main",
+		});
+		expect(result.ok).toBe(false);
+		expect(result.checks.some((c) => !c.ok && c.message.includes("boom"))).toBe(true);
 	});
 });
