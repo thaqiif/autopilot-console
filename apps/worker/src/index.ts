@@ -1,6 +1,7 @@
 export {
 	createDevelopmentWorker,
 	type DevelopmentWorker,
+	type DevelopmentWorkerBeginResult,
 	type DevelopmentWorkerOptions,
 	type DevelopmentWorkerOutcome,
 	type HeartbeatScheduler,
@@ -26,6 +27,21 @@ export {
 	verifyDevelopmentResult,
 } from "./development/result-verifier";
 export {
+	createPRHandoffWorker,
+	type PRHandoffContext,
+	type PRHandoffOutcome,
+	type PRHandoffStore,
+	type PRHandoffWorker,
+	type PRHandoffWorkerOptions,
+} from "./github/pr-handoff-worker";
+export {
+	createPRReconciliationWorker,
+	type PollablePRView,
+	type PRReconciliationStore,
+	type PRReconciliationWorker,
+	type PRReconciliationWorkerOptions,
+} from "./github/pr-reconciliation-worker";
+export {
 	type CancellationController,
 	type CancellationControllerOptions,
 	type CancelOutcome,
@@ -50,4 +66,13 @@ export {
 	type WorkerRegistrationService,
 	type WorkerRegistrationServiceOptions,
 } from "./runtime/worker-registration";
+export {
+	type ConcurrentDevelopmentWorkerRuntimeOptions,
+	createConcurrentDevelopmentWorkerRuntime,
+	createWorkerRuntime,
+	type SlotStartResult,
+	type WorkerRuntime,
+	type WorkerRuntimeOptions,
+	type WorkerRuntimeOutcome,
+} from "./runtime/worker-runtime";
 export const packageName = "@autopilot-console/worker" as const;

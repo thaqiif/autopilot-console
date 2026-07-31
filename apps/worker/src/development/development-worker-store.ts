@@ -221,8 +221,10 @@ export function createPostgresDevelopmentWorkerStore(sql: Queryable): Developmen
 			});
 		},
 		async heartbeat(attemptId, input) {
+			// Lease renewal only. Active-job counts are owned by the concurrent
+			// production supervisor so multi-slot heartbeats stay accurate.
 			await Promise.all([
-				heartbeatWorker(sql, input.workerRegistrationId, { activeJobs: 1 }),
+				heartbeatWorker(sql, input.workerRegistrationId, {}),
 				renewLease(sql, {
 					attemptId,
 					workerRegistrationId: input.workerRegistrationId,

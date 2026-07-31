@@ -54,8 +54,22 @@ export type DevelopmentWorkerOutcome =
 	| { kind: "failed"; attemptId: string; reason: string }
 	| { kind: "blocked"; attemptId: string; reason: string };
 
+export type DevelopmentWorkerBeginResult =
+	| { kind: "idle" }
+	| {
+			kind: "started";
+			attemptId: string;
+			finished: Promise<DevelopmentWorkerOutcome>;
+	  };
+
 export interface DevelopmentWorker {
+	/** Claim and fully execute one attempt. Sequential convenience for tests. */
 	runOnce(): Promise<DevelopmentWorkerOutcome>;
+	/**
+	 * Claim one eligible attempt and start execution without awaiting completion.
+	 * Returns idle when no work is available. Used by the concurrent production supervisor.
+	 */
+	beginOnce(): Promise<DevelopmentWorkerBeginResult>;
 }
 
 interface SharedDevelopmentWorkerOptions {
@@ -92,23 +106,37 @@ export function createDevelopmentWorker(options: DevelopmentWorkerOptions): Deve
 		remoteName: options.remoteName,
 	});
 
-	return { runOnce };
+	return { runOnce, beginOnce };
 
-	async function runOnce(): Promise<DevelopmentWorkerOutcome> {
+	async function beginOnce(): Promise<DevelopmentWorkerBeginResult> {
 		const claim = await options.queue.claimNextAttempt(options.workerId);
 		if (!claim) return { kind: "idle" };
-		const canonicalAttempt = await store.getAttempt(claim.attempt.id);
+		const attemptId = claim.attempt.id;
+		const finished = executeClaimed(claim.attempt);
+		return { kind: "started", attemptId, finished };
+	}
+
+	async function runOnce(): Promise<DevelopmentWorkerOutcome> {
+		const begun = await beginOnce();
+		if (begun.kind === "idle") return { kind: "idle" };
+		return begun.finished;
+	}
+
+	async function executeClaimed(
+		claimedAttempt: DevelopmentAttemptRow,
+	): Promise<DevelopmentWorkerOutcome> {
+		const canonicalAttempt = await store.getAttempt(claimedAttempt.id);
 		if (!canonicalAttempt) {
 			return {
 				kind: "blocked",
-				attemptId: claim.attempt.id,
+				attemptId: claimedAttempt.id,
 				reason: "Claimed attempt no longer exists.",
 			};
 		}
 
 		let context: DevelopmentExecutionContext;
 		try {
-			context = await preflight.prepare(claim.attempt);
+			context = await preflight.prepare(claimedAttempt);
 		} catch (error) {
 			const preflightError =
 				error instanceof DevelopmentPreflightError
