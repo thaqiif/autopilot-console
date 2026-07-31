@@ -99,7 +99,7 @@ describe("workspace bootstrap", () => {
 		const rootPkg = readJson(join(ROOT, "package.json"));
 		const testScript = ((rootPkg.scripts as Record<string, string>).test ?? "").trim();
 
-		expect(testScript).toMatch(/bun run --filter ['"]?\*['"]? test/);
+		expect(testScript).toMatch(/bun run --filter ['"]?\*['"]?(?: --sequential)? test/);
 		expect(testScript).toMatch(/bun test tests/);
 		expect(testScript).not.toBe("bun test");
 	});

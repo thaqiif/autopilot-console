@@ -7,7 +7,7 @@
 		"packages/*"
 	],
 	"scripts": {
-		"test": "bun run --filter '*' test && bun test tests",
+		"test": "bun run --filter '*' --sequential test && bun test tests scripts",
 		"test:integration": "bun test **/*.integration.test.ts",
 		"typecheck": "bun run --filter '*' typecheck",
 		"lint": "biome check .",

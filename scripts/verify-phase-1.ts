@@ -528,17 +528,25 @@ export async function runPhase1Qualification(
 		if (maybeStop(push(r))) return finish(false);
 	}
 
-	// unit — workspace package tests + architecture + gate self-tests
-	// (Playwright *.spec is excluded by bunfig; composition e2e is the browser gate)
+	// unit — sequential workspace package tests (avoids public-schema races from
+	// concurrent resetSchema across packages) + architecture + gate self-tests.
+	// Playwright *.spec is excluded by bunfig; composition e2e is the browser gate.
 	{
 		const t0 = Date.now();
-		const packages = await runCommandGate("unit", ["bun", "run", "test"], spawn, env, root, t0);
+		const packages = await runCommandGate(
+			"unit",
+			["bun", "run", "--filter", "*", "--sequential", "test"],
+			spawn,
+			env,
+			root,
+			t0,
+		);
 		if (!packages.ok) {
 			if (maybeStop(push(packages))) return finish(false);
 		} else {
-			const scripts = await runCommandGate(
+			const repoTests = await runCommandGate(
 				"unit",
-				["bun", "test", "scripts"],
+				["bun", "test", "tests", "scripts"],
 				spawn,
 				env,
 				root,
@@ -546,11 +554,11 @@ export async function runPhase1Qualification(
 			);
 			const merged: GateRunResult = {
 				name: "unit",
-				ok: packages.ok && scripts.ok,
+				ok: packages.ok && repoTests.ok,
 				durationMs: Date.now() - t0,
-				exitCode: scripts.ok ? packages.exitCode : scripts.exitCode,
-				message: scripts.ok ? packages.message : (scripts.message ?? packages.message),
-				outputTail: [packages.outputTail, scripts.outputTail].filter(Boolean).join("\n---\n"),
+				exitCode: repoTests.ok ? packages.exitCode : repoTests.exitCode,
+				message: repoTests.ok ? packages.message : (repoTests.message ?? packages.message),
+				outputTail: [packages.outputTail, repoTests.outputTail].filter(Boolean).join("\n---\n"),
 			};
 			if (maybeStop(push(merged))) return finish(false);
 		}
