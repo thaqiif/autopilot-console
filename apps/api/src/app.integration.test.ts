@@ -395,6 +395,27 @@ describe("production dependency health", () => {
 		expect(JSON.stringify(result)).not.toMatch(/token|password|secret|gh\s/i);
 	});
 
+	test("worker readiness includes queue depth, oldest queued age, and polling lag", async () => {
+		await sql`DELETE FROM worker_registrations`;
+		await sql`
+			INSERT INTO worker_registrations (
+				worker_id, hostname, capacity, active_jobs, last_heartbeat_at
+			) VALUES ('worker-queue-metrics', 'worker-host', 4, 1, now())
+		`;
+		const result = await probes().worker.check();
+		expect(result.ok).toBe(true);
+		expect(result.detail).toMatchObject({
+			capacity: 4,
+			activeJobs: 1,
+		});
+		// Production Settings contract (req 30): queue + polling lag share one
+		// documented health detail shape with heartbeat/capacity fields.
+		expect(typeof result.detail?.queueDepth).toBe("number");
+		expect(typeof result.detail?.oldestQueuedAgeMs).toBe("number");
+		expect(typeof result.detail?.pollingLagMs).toBe("number");
+		expect(JSON.stringify(result)).not.toMatch(/token|password|secret/i);
+	});
+
 	test("worker readiness is unhealthy when no registration exists", async () => {
 		await sql`DELETE FROM worker_registrations`;
 		const result = await probes().worker.check();
