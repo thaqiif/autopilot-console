@@ -606,7 +606,7 @@ export async function runPhase1Qualification(
 		const t0 = Date.now();
 		const playwright = await runCommandGate(
 			"browser",
-			["bun", "run", "--filter", "web", "e2e"],
+			["bun", "run", "--filter", "@autopilot-console/web", "e2e"],
 			spawn,
 			env,
 			root,
