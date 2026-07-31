@@ -14,3 +14,7 @@ docs/autopilotagent/**/run.pid
 docs/autopilotagent/**/loop-state.md
 docs/autopilotagent/**/stop-signal
 core.*
+.tmp-*
+apps/web/playwright-report/
+apps/web/test-results/
+phase-1-qualification-summary.json

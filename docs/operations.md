@@ -265,3 +265,22 @@ interruptions, Git/GitHub adapter errors, polling lag, and attention counts.
 Metrics appear in worker structured logs (`worker metrics`) and inform health
 probes that observe registration heartbeat, capacity, queue depth, oldest queued
 age, and GitHub polling lag.
+
+## Phase 1 release qualification
+
+Operators claim Phase 1 release qualification only after the documented command
+passes twice consecutively:
+
+```bash
+export DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/autopilot_console}"
+bun run verify:phase-1
+bun run verify:phase-1
+```
+
+The command fails closed when Bun, PostgreSQL, the Docker CLI, Playwright
+Chromium, or any named gate (typecheck, lint, unit, database, process, browser,
+coverage, build, migrations, image, compose, deployment-smoke) is missing,
+skipped, unavailable, or failing. Inspect `phase-1-qualification-summary.json`
+for the machine-readable gate report. Align status claims with the requirement
+ledger, README, deployment guide, and changelog — do not report qualification
+when any critical test was skipped or opt-in.

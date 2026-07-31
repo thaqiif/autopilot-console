@@ -153,11 +153,48 @@ Diagnostic retention under `diagnostic-logs` enforces documented limits:
 Structured progress and audit correlation fields (`projectId`, `featureId`,
 `jobAttemptId`, `correlationId`) are preserved even when bodies are truncated.
 
+## Phase 1 release qualification
+
+Before claiming Phase 1 is release-qualified, run the single aggregate command
+twice consecutively from a clean documented environment:
+
+```bash
+export DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/autopilot_console}"
+bun run verify:phase-1
+bun run verify:phase-1
+```
+
+`verify:phase-1` (`scripts/verify-phase-1.ts`) provisions or verifies every
+required dependency and fails closed with an actionable message when any gate is
+missing, skipped, unavailable, or failing. Named gates:
+
+| Gate | What it runs |
+| --- | --- |
+| dependencies | Bun, PostgreSQL, Docker CLI, Playwright Chromium |
+| typecheck | `bun run typecheck` |
+| lint | `bun run lint` |
+| unit | workspace unit suites + architecture tests |
+| database | `packages/database` integration suites |
+| process | worker, API, git, GitHub, autopilot, and `tests/integration` |
+| browser | Playwright (`apps/web` e2e) + composition specs (`tests/e2e`) |
+| coverage | `bun run coverage:critical` |
+| build | production package builds |
+| migrations | forward-only database migrate |
+| image | Dockerfile presence + `docker compose build --check` / build graph |
+| compose | `docker compose config` service graph |
+| deployment-smoke | idempotent schema/health probe against DATABASE_URL |
+
+No critical installed-CLI, database, process, browser, migration, image, or
+deployment test is skipped or opt-in when qualification is claimed. The command
+writes `phase-1-qualification-summary.json` for machine-readable status. The
+requirement ledger, README, this guide, the operations guide, and the changelog
+must report the same qualification command and status.
+
 ## Current Phase 1 limitations
 
 - Multi-replica workers share the database queue; capacity is per-registration.
-- Aggregate release qualification and full owner-journey e2e remain separate
-  Phase 1 requirements beyond production composition.
+- Phase 1 terminal product state is **Development Merged**; Console does not
+  claim production release completion.
 
 See the Phase 1 task ledger and progress notes under
 `docs/autopilotagent/autopilot-console-phase-1` for the independently verifiable
