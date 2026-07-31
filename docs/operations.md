@@ -194,23 +194,58 @@ docker compose exec worker gh --version
 
 ### Health Endpoint Response
 
-The `/api/health` endpoint returns a structured report:
+The `/api/health` endpoint returns a structured report. Worker detail fields are
+the single documented contract for Settings: capacity, active jobs, heartbeat
+age, queue depth, oldest queued age, and GitHub polling lag.
 
 ```json
 {
   "ok": true,
   "data": {
     "status": "ok",
-    "database": { "name": "database", "status": "ok" },
-    "worker": { "name": "worker", "status": "ok" },
-    "autopilot": { "name": "autopilot", "status": "ok" },
-    "github": { "name": "github", "status": "ok" },
-    "checkedAt": "2026-01-15T12:00:00.000Z"
+    "database": {
+      "name": "database",
+      "status": "ok",
+      "detail": { "available": true }
+    },
+    "worker": {
+      "name": "worker",
+      "status": "ok",
+      "detail": {
+        "active": true,
+        "capacity": 4,
+        "activeJobs": 2,
+        "availableSlots": 2,
+        "lastHeartbeatAt": "2026-07-31T12:00:00.000Z",
+        "heartbeatAge": 1500,
+        "queueDepth": 3,
+        "oldestQueuedAgeMs": 42000,
+        "pollingLagMs": 900
+      }
+    },
+    "autopilot": {
+      "name": "autopilot",
+      "status": "ok",
+      "detail": { "available": true }
+    },
+    "github": {
+      "name": "github",
+      "status": "ok",
+      "detail": {
+        "authenticated": true,
+        "projectAvailable": true,
+        "repositoryReadable": true
+      }
+    },
+    "checkedAt": "2026-07-31T12:00:00.000Z"
   }
 }
 ```
 
 Status values: `ok` (all healthy), `degraded` (partial), `down` (critical failure).
+Settings maps these to accessible text: healthy, degraded, unavailable.
+Queue depth and oldest age come from `development_job_attempts` with status
+`QUEUED`. Polling lag is the age of the newest `pull_requests.last_observed_at`.
 
 ### Structured Logging
 
@@ -228,4 +263,5 @@ Runtime metrics are updated from real API and worker operations, including queue
 depth, active jobs, oldest queued age, heartbeat age, job durations,
 interruptions, Git/GitHub adapter errors, polling lag, and attention counts.
 Metrics appear in worker structured logs (`worker metrics`) and inform health
-probes that observe registration heartbeat and capacity.
+probes that observe registration heartbeat, capacity, queue depth, oldest queued
+age, and GitHub polling lag.

@@ -4,9 +4,7 @@ import { useSseRestRefresh } from "../../api/use-sse-rest-refresh";
 import { useAuth } from "../../auth/auth-provider";
 import { ViewState } from "../../components/feedback/view-state";
 import { LocalDateTime } from "../../time/local-date-time";
-
-/** Production health component status from /api/health (req 22/30). */
-type ComponentStatus = "ok" | "degraded" | "down";
+import { type ComponentStatus, formatMetric, toAccessibleStatus } from "./health-status";
 
 interface HealthComponent {
 	name: string;
@@ -25,21 +23,6 @@ interface HealthStatus {
 }
 
 type PageState = "loading" | "ready" | "error" | "stale" | "unauthorized";
-
-/** Accessible status token: text + data-status, never color alone. */
-type AccessibleStatus = "healthy" | "degraded" | "unavailable";
-
-function toAccessibleStatus(status: ComponentStatus | undefined): AccessibleStatus {
-	if (status === "ok") return "healthy";
-	if (status === "degraded") return "degraded";
-	return "unavailable";
-}
-
-function formatMetric(value: unknown): string {
-	if (value === undefined || value === null || value === "") return "unavailable";
-	if (typeof value === "number" && !Number.isFinite(value)) return "unavailable";
-	return String(value);
-}
 
 function StatusValue({ status }: { status: ComponentStatus | undefined }) {
 	const accessible = toAccessibleStatus(status);
