@@ -8,6 +8,7 @@ import {
 	createDevelopmentQueue,
 } from "../../../packages/database/src/index";
 import { CliGitGateway } from "../../../packages/git/src/index";
+import { GhCliGateway } from "../../../packages/github/src/index";
 import {
 	createDiagnosticLogRetention,
 	createMetricsCollector,
@@ -19,11 +20,18 @@ import { createDevelopmentWorker } from "./development/development-worker";
 import { createCancellationController } from "./process/cancellation-controller";
 import { createProcessTreeInspector } from "./process/process-tree";
 import { createRetryService } from "./process/retry-service";
+import { createGithubRuntime } from "./runtime/github-runtime";
 import { createJobCommandWorker } from "./runtime/job-command-worker";
 import { reconcileOrphansAtWorkerStartup } from "./runtime/startup-reconciliation";
 import { createWorkerRegistrationService } from "./runtime/worker-registration";
 import { createConcurrentDevelopmentWorkerRuntime } from "./runtime/worker-runtime";
 
+export type {
+	GithubRuntime,
+	GithubRuntimeOptions,
+	HandoffProcessResult,
+} from "./runtime/github-runtime";
+export { createGithubRuntime } from "./runtime/github-runtime";
 export type {
 	JobCommandWorker,
 	JobCommandWorkerOptions,
@@ -118,13 +126,23 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 			retry,
 			reconcileOrphans: () => reconcileOrphansAtWorkerStartup(database.sql),
 		});
+		const git = new CliGitGateway();
+		const github = new GhCliGateway();
 		const worker = createDevelopmentWorker({
 			sql: database.sql,
 			queue,
-			git: new CliGitGateway(),
+			git,
 			autopilot,
 			workerId,
 			workerRegistrationId: registration.id,
+		});
+		const githubRuntime = createGithubRuntime({
+			sql: database.sql,
+			git,
+			github,
+			workerId,
+			pollIntervalMs: config.github.pollIntervalSeconds * 1_000,
+			handoffPollIntervalMs: IDLE_POLL_MS,
 		});
 
 		const supervisor = createConcurrentDevelopmentWorkerRuntime({
@@ -192,9 +210,16 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 			}
 		})();
 
-		// Drain durable cancel commands owned by this worker concurrently with development slots.
+		// Drain durable cancel commands and GitHub handoff/reconciliation
+		// concurrently with development slots.
 		const commandLoop = jobCommands.run(signal);
-		await Promise.all([supervisor.run(signal), commandLoop, background.catch(() => undefined)]);
+		const githubLoop = githubRuntime.run(signal);
+		await Promise.all([
+			supervisor.run(signal),
+			commandLoop,
+			githubLoop,
+			background.catch(() => undefined),
+		]);
 
 		await database.sql`
 			UPDATE worker_registrations SET stopped_at = now(), active_jobs = 0

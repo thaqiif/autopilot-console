@@ -776,6 +776,93 @@ export async function claimOutboxIntent(
 	return rows[0] ? mapOutbox(rows[0] as Record<string, unknown>) : null;
 }
 
+/** Atomically claim the next pending outbox intent of an optional kind (FIFO). */
+export async function claimNextOutboxIntent(
+	sql: Queryable,
+	input: { workerId: string; kind?: string },
+): Promise<OutboxIntentRow | null> {
+	const capable = sql as Queryable & {
+		begin?<T>(fn: (tx: Queryable) => Promise<T>): Promise<T>;
+	};
+	const claim = async (tx: Queryable): Promise<OutboxIntentRow | null> => {
+		const candidates =
+			input.kind === undefined
+				? await tx`
+						SELECT id
+						FROM outbox_intents
+						WHERE status = 'pending'
+						ORDER BY created_at ASC, id ASC
+						LIMIT 1
+						FOR UPDATE SKIP LOCKED
+					`
+				: await tx`
+						SELECT id
+						FROM outbox_intents
+						WHERE status = 'pending'
+							AND kind = ${input.kind}
+						ORDER BY created_at ASC, id ASC
+						LIMIT 1
+						FOR UPDATE SKIP LOCKED
+					`;
+		const id = candidates[0]?.id as string | undefined;
+		if (!id) return null;
+		const rows = await tx`
+			UPDATE outbox_intents
+			SET
+				status = 'claimed',
+				claimed_by = ${input.workerId},
+				claimed_at = now(),
+				updated_at = now()
+			WHERE id = ${id}
+				AND status = 'pending'
+			RETURNING *
+		`;
+		return rows[0] ? mapOutbox(rows[0] as Record<string, unknown>) : null;
+	};
+	if (typeof capable.begin === "function") {
+		return capable.begin((tx) => claim(tx));
+	}
+	return claim(sql);
+}
+
+export async function completeOutboxIntent(
+	sql: Queryable,
+	input: { intentId: string; workerId: string },
+): Promise<OutboxIntentRow | null> {
+	const rows = await sql`
+		UPDATE outbox_intents
+		SET
+			status = 'completed',
+			completed_at = now(),
+			updated_at = now(),
+			last_error = NULL
+		WHERE id = ${input.intentId}
+			AND status = 'claimed'
+			AND claimed_by = ${input.workerId}
+		RETURNING *
+	`;
+	return rows[0] ? mapOutbox(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function failOutboxIntent(
+	sql: Queryable,
+	input: { intentId: string; workerId: string; error: string },
+): Promise<OutboxIntentRow | null> {
+	const rows = await sql`
+		UPDATE outbox_intents
+		SET
+			status = 'failed',
+			completed_at = now(),
+			updated_at = now(),
+			last_error = ${input.error}
+		WHERE id = ${input.intentId}
+			AND status = 'claimed'
+			AND claimed_by = ${input.workerId}
+		RETURNING *
+	`;
+	return rows[0] ? mapOutbox(rows[0] as Record<string, unknown>) : null;
+}
+
 export async function createIdempotencyRecord(
 	sql: Queryable,
 	input: {

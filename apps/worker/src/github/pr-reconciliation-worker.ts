@@ -145,10 +145,12 @@ export function createPRReconciliationWorker(
 
 					if (targetState !== pr.featureState) {
 						const operationId = `reconcile:${pr.featureId}:${targetState}:${observationTime.toISOString()}`;
+						// BLOCKED is only allowed via the deterministic guard owner.
+						const owner = targetState === "BLOCKED" ? "guard" : "poller";
 						const transition = await store.transitionFeature(pr.featureId, {
 							from: pr.featureState,
 							to: targetState,
-							owner: "poller",
+							owner,
 							operationId,
 						});
 
