@@ -1,12 +1,12 @@
 /**
- * Job action routes (requirement 22).
+ * Job action routes (requirements 22 and 25).
  *
  * POST /api/features/:id/cancel — cancel development
  * POST /api/features/:id/retry  — retry development
  *
- * These routes delegate to the domain layer for idempotency and validation.
- * Actual cancellation process escalation happens in the worker via
- * CancellationController, not in the API request scope.
+ * These routes persist durable intents/results in request scope and return
+ * promptly. Process signaling, Autopilot process probes, Git, and GitHub effects
+ * belong to the worker, not HTTP handlers.
  */
 
 import { Hono } from "hono";
@@ -18,7 +18,9 @@ import {
 	type FeatureRow,
 	getDevelopmentAttempt,
 	getFeatureById,
+	updateAttemptStatus,
 } from "../../../../packages/database/src/index";
+import { applyFeatureTransition, type FeatureState } from "../../../../packages/domain/src/index";
 import { createNormalizedError } from "../../../../packages/shared/src/index";
 import { createMutationIdempotency } from "../mutations/idempotency";
 
@@ -26,7 +28,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 export interface JobActionRoutesOptions {
 	sql: Queryable;
-	cancelHandler: (
+	/**
+	 * Optional legacy hook retained for tests that inject fakes. Production
+	 * composition leaves this unset; queued cancellation is durable SQL only.
+	 */
+	cancelHandler?: (
 		attempt: DevelopmentAttemptRow,
 		feature: FeatureRow,
 		reason: string,
@@ -50,6 +56,7 @@ export function createJobActionRoutes(options: JobActionRoutesOptions): Hono {
 
 	app.post("/api/features/:id/cancel", async (c) => {
 		const correlationId = c.get("correlationId") ?? "";
+		const adminId = c.get("adminId") ?? "";
 		const featureId = c.req.param("id");
 
 		if (!UUID_RE.test(featureId)) {
@@ -173,7 +180,7 @@ export function createJobActionRoutes(options: JobActionRoutesOptions): Hono {
 							});
 							await appendAuditEvent(tx, {
 								actorType: "administrator",
-								actorId: c.get("adminId") ?? "",
+								actorId: adminId,
 								action: "development.cancel_request",
 								targetType: "development_attempt",
 								targetId: attempt.id,
@@ -189,16 +196,134 @@ export function createJobActionRoutes(options: JobActionRoutesOptions): Hono {
 					});
 				}
 
-				const outcome = await cancelHandler(attempt, feature, reason, operationKey);
-				if (outcome.kind === "blocked") {
-					throw createNormalizedError({
-						code: "PRECONDITION_FAILED",
-						message: outcome.reason ?? "Cancellation blocked.",
-						httpStatus: 409,
-						correlationId,
+				if (attempt.status === "QUEUED" || attempt.status === "CANCELLED") {
+					return withTransaction(sql, async (tx) => {
+						const freshFeature = await getFeatureById(tx, featureId);
+						if (!freshFeature) {
+							throw createNormalizedError({
+								code: "NOT_FOUND",
+								message: "Feature not found.",
+								httpStatus: 404,
+								correlationId,
+							});
+						}
+						const [locked] = await tx`
+							SELECT status
+							FROM development_job_attempts
+							WHERE id = ${attempt.id} AND project_id = ${projectId} AND feature_id = ${featureId}
+							FOR UPDATE
+						`;
+						if (!locked) {
+							throw createNormalizedError({
+								code: "NOT_FOUND",
+								message: "Development attempt not found for confirmed target.",
+								httpStatus: 404,
+								correlationId,
+							});
+						}
+						if (locked.status === "CANCELLED") {
+							return { attemptId: attempt.id, outcome: "cancelled" };
+						}
+						if (locked.status !== "QUEUED") {
+							throw createNormalizedError({
+								code: "PRECONDITION_FAILED",
+								message: "Only QUEUED attempts can be cancelled without worker process control.",
+								httpStatus: 409,
+								correlationId,
+							});
+						}
+
+						const transition = applyFeatureTransition({
+							featureId,
+							from: freshFeature.state as FeatureState,
+							to: "DEVELOPMENT_CANCELLED",
+							owner: "human",
+							cause: reason,
+							operationId: operationKey,
+							expectedVersion: freshFeature.rowVersion,
+							currentVersion: freshFeature.rowVersion,
+							observedState: freshFeature.state as FeatureState,
+						});
+						if (transition.kind === "rejected") {
+							throw createNormalizedError({
+								code: "PRECONDITION_FAILED",
+								message: transition.message,
+								httpStatus: 409,
+								correlationId,
+							});
+						}
+						if (transition.kind === "applied") {
+							const updated = await tx`
+								UPDATE features
+								SET state = ${transition.nextState},
+									row_version = ${transition.nextVersion},
+									updated_at = now()
+								WHERE id = ${featureId}
+									AND state = ${transition.priorState}
+									AND row_version = ${transition.priorVersion}
+								RETURNING id
+							`;
+							if (updated.length !== 1) {
+								throw createNormalizedError({
+									code: "CONFLICT",
+									message: "Feature changed while cancelling development.",
+									httpStatus: 409,
+									correlationId,
+								});
+							}
+						}
+
+						await updateAttemptStatus(tx, attempt.id, {
+							status: "CANCELLED",
+							endedAt: new Date(),
+							cancellationRequestedAt: new Date(),
+							cancellationReason: reason,
+						});
+						await appendActivityEvent(tx, {
+							projectId,
+							featureId,
+							attemptId: attempt.id,
+							type: "development.cancelled",
+							summary: `Development cancelled: ${reason}`,
+							source: "api",
+						});
+						await appendAuditEvent(tx, {
+							actorType: "administrator",
+							actorId: adminId,
+							action: "development.cancel",
+							targetType: "development_attempt",
+							targetId: attempt.id,
+							projectId,
+							featureId,
+							attemptId: attempt.id,
+							correlationId,
+							result: "success",
+							priorValues: { status: "QUEUED" },
+							nextValues: { status: "CANCELLED" },
+						});
+						return { attemptId: attempt.id, outcome: "cancelled" };
 					});
 				}
-				return { attemptId: outcome.attemptId ?? attempt.id, outcome: outcome.kind };
+
+				if (cancelHandler) {
+					const outcome = await cancelHandler(attempt, feature, reason, operationKey);
+					if (outcome.kind === "blocked") {
+						throw createNormalizedError({
+							code: "PRECONDITION_FAILED",
+							message: outcome.reason ?? "Cancellation blocked.",
+							httpStatus: 409,
+							correlationId,
+						});
+					}
+					return { attemptId: outcome.attemptId ?? attempt.id, outcome: outcome.kind };
+				}
+
+				throw createNormalizedError({
+					code: "PRECONDITION_FAILED",
+					message: "Cancellation is not available for this attempt status.",
+					httpStatus: 409,
+					correlationId,
+				});
 			},
 			scope: (data) => ({ projectId, featureId, attemptId: data.attemptId }),
 		});
@@ -289,6 +414,8 @@ export function createJobActionRoutes(options: JobActionRoutesOptions): Hono {
 		`;
 		const taskApprovalId = (latestApproval?.id as string | undefined) ?? "";
 
+		// RetryService already owns durable idempotency under the operation key.
+		// Do not double-write through createMutationIdempotency (namespace clash).
 		const outcome = await retryHandler({
 			featureId,
 			projectId: feature.projectId,
@@ -308,11 +435,12 @@ export function createJobActionRoutes(options: JobActionRoutesOptions): Hono {
 			});
 		}
 
+		// Normalize idempotent replays so concurrent HTTP retries return one outcome shape.
 		return c.json({
 			ok: true as const,
 			data: {
 				attemptId: outcome.attempt?.id,
-				outcome: outcome.kind,
+				outcome: "retried",
 			},
 		});
 	});

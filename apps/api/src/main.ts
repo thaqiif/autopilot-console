@@ -13,14 +13,22 @@ import {
 } from "../../../packages/domain/src/index";
 import { CliGitGateway } from "../../../packages/git/src/index";
 import { GhCliGateway } from "../../../packages/github/src/index";
-import { loadRuntimeConfig, redactSecrets } from "../../../packages/shared/src/index";
-import { createCancellationController } from "../../worker/src/process/cancellation-controller";
-import { createProcessTreeInspector } from "../../worker/src/process/process-tree";
+import {
+	createMetricsCollector,
+	createStructuredLogger,
+	loadRuntimeConfig,
+	redactSecrets,
+} from "../../../packages/shared/src/index";
 import { createRetryService } from "../../worker/src/process/retry-service";
 import { bootstrapAdministrator } from "./auth/admin-bootstrap";
 import { createSessionService } from "./auth/session-service";
 import type { HealthProbe } from "./health/health-service";
 import { createServer } from "./server";
+
+const logger = createStructuredLogger({
+	baseContext: { service: "api" },
+});
+const metrics = createMetricsCollector();
 
 export async function startApi() {
 	const config = loadRuntimeConfig();
@@ -37,14 +45,12 @@ export async function startApi() {
 		const git = new CliGitGateway();
 		const github = new GhCliGateway();
 		const autopilot = new CliAutopilotRunner({ executablePath: process.env.AUTOPILOTAGENT_BIN });
-		const cancellation = createCancellationController({
-			sql: database.sql,
-			tree: createProcessTreeInspector(),
-		});
-		const retry = createRetryService({ sql: database.sql, autopilot });
-		const healthProbes = createProductionHealthProbes(database.sql, autopilot, github);
+		// Durable SQL-only retry: no Autopilot process probes in API request scope.
+		const retry = createRetryService({ sql: database.sql });
+		const healthProbes = createProductionHealthProbes(database.sql, autopilot, github, metrics);
+		const port = Number(process.env.PORT) || 3000;
 		const server = createServer({
-			port: Number(process.env.PORT) || 3000,
+			port,
 			nodeEnv: config.nodeEnv,
 			sessionService: createSessionService({ sql: database.sql }),
 			healthProbes,
@@ -60,28 +66,33 @@ export async function startApi() {
 				releaseService: createReleaseService({ sql: database.sql }),
 				featureService: createFeatureService({ sql: database.sql }),
 				taskApprovalService: createTaskApprovalService({ sql: database.sql }),
-				cancelHandler: (attempt, feature, reason, operationId) =>
-					attempt.status === "QUEUED"
-						? cancellation.cancelQueued(attempt, feature, reason, operationId)
-						: Promise.resolve({
-								kind: "blocked",
-								attemptId: attempt.id,
-								reason: "Running cancellation must be performed by the owning worker.",
-							}),
+				// Queued cancel is durable in the route; running cancel is worker-owned.
+				cancelHandler: async (attempt) => ({
+					kind: "blocked",
+					attemptId: attempt.id,
+					reason: "Running cancellation must be performed by the owning worker.",
+				}),
 				retryHandler: (request) => retry.retry(request),
 			},
+		});
+
+		logger.info("api listening", {
+			port,
+			nodeEnv: config.nodeEnv,
+			metrics: metrics.snapshot(),
 		});
 
 		let closing = false;
 		const close = async () => {
 			if (closing) return;
 			closing = true;
+			logger.info("api shutting down");
 			server.stop();
 			await database.end();
 		};
 		process.once("SIGTERM", () => void close());
 		process.once("SIGINT", () => void close());
-		return { server, database, close };
+		return { server, database, close, logger, metrics };
 	} catch (error) {
 		await database.end();
 		throw error;
@@ -103,6 +114,7 @@ export function createProductionHealthProbes(
 	sql: ReturnType<typeof createDatabaseClient>["sql"],
 	autopilot: AutopilotHealthAdapter,
 	github: GithubHealthAdapter,
+	metricsCollector = metrics,
 ): { database: HealthProbe; worker: HealthProbe; autopilot: HealthProbe; github: HealthProbe } {
 	return {
 		database: {
@@ -123,6 +135,8 @@ export function createProductionHealthProbes(
 				`;
 				const worker = rows[0];
 				if (!worker) {
+					metricsCollector.setActiveJobs(0, 0);
+					metricsCollector.setHeartbeatAge(Number.POSITIVE_INFINITY);
 					return {
 						ok: false,
 						detail: {
@@ -136,6 +150,10 @@ export function createProductionHealthProbes(
 				}
 				const capacity = Number(worker.capacity);
 				const activeJobs = Number(worker.active_jobs);
+				const lastHeartbeatAt = worker.last_heartbeat_at as Date;
+				const heartbeatAge = Math.max(0, Date.now() - lastHeartbeatAt.getTime());
+				metricsCollector.setActiveJobs(activeJobs, capacity);
+				metricsCollector.setHeartbeatAge(heartbeatAge);
 				return {
 					ok: true,
 					detail: {
@@ -143,7 +161,9 @@ export function createProductionHealthProbes(
 						capacity,
 						activeJobs,
 						availableSlots: Math.max(0, capacity - activeJobs),
-						lastHeartbeatAt: (worker.last_heartbeat_at as Date).toISOString(),
+						lastHeartbeatAt: lastHeartbeatAt.toISOString(),
+						heartbeatAge,
+						metrics: metricsCollector.snapshot(),
 					},
 				};
 			},
@@ -165,11 +185,17 @@ export function createProductionHealthProbes(
 				if (!project) return { ok: true, detail: { configured: true, projectAvailable: false } };
 				const owner = project.github_owner as string;
 				const repository = project.github_repo as string;
-				const result = await github.validateAccess({
-					repository: { owner, repository, fullName: `${owner}/${repository}` },
-					projectRoot: project.canonical_path as string,
-				});
-				return { ok: result.ok, detail: { authenticated: result.authenticated } };
+				try {
+					const result = await github.validateAccess({
+						repository: { owner, repository, fullName: `${owner}/${repository}` },
+						projectRoot: project.canonical_path as string,
+					});
+					if (!result.ok) metricsCollector.incrementAdapterError("github");
+					return { ok: result.ok, detail: { authenticated: result.authenticated } };
+				} catch {
+					metricsCollector.incrementAdapterError("github");
+					return { ok: false, detail: { authenticated: false } };
+				}
 			},
 		},
 	};
@@ -178,7 +204,7 @@ export function createProductionHealthProbes(
 if (import.meta.main) {
 	startApi().catch((error) => {
 		const detail = error instanceof Error ? redactSecrets(error.message) : "unknown startup error";
-		console.error(`API startup failed: ${detail}`);
+		logger.error("api startup failed", { detail });
 		process.exit(1);
 	});
 }

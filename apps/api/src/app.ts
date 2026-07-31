@@ -45,7 +45,7 @@ export interface DomainAdapters {
 	releaseService: ReleaseService;
 	featureService: FeatureService;
 	taskApprovalService: TaskApprovalService;
-	cancelHandler: (
+	cancelHandler?: (
 		attempt: import("../../../packages/database/src/index").DevelopmentAttemptRow,
 		feature: import("../../../packages/database/src/index").FeatureRow,
 		reason: string,
