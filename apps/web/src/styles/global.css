@@ -33,6 +33,7 @@ a {
 	text-decoration: none;
 }
 
+a:focus,
 a:focus-visible {
 	outline: 2px solid var(--color-focus);
 	outline-offset: 2px;
@@ -44,13 +45,33 @@ button {
 	font-size: inherit;
 	min-height: var(--tap-target-min);
 	min-width: var(--tap-target-min);
+	padding: var(--space-2) var(--space-3);
 	cursor: pointer;
 }
 
+button:focus,
 button:focus-visible {
 	outline: 2px solid var(--color-focus);
 	outline-offset: 2px;
 	border-radius: 2px;
+}
+
+/* Primary interactive targets stay at least 44x44 on all viewports. */
+button,
+a[href],
+input,
+select,
+textarea,
+[role="button"] {
+	min-height: var(--tap-target-min);
+	min-width: var(--tap-target-min);
+}
+
+a[href] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: var(--space-2);
 }
 
 @media (max-width: 768px) {
@@ -111,13 +132,16 @@ textarea {
 	width: 100%;
 }
 
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible {
-	outline: 2px solid var(--color-focus);
-	outline-offset: 2px;
-	border-radius: 2px;
-}
+input:focus,
+	input:focus-visible,
+	select:focus,
+	select:focus-visible,
+	textarea:focus,
+	textarea:focus-visible {
+		outline: 2px solid var(--color-focus);
+		outline-offset: 2px;
+		border-radius: 2px;
+	}
 
 label {
 	display: block;

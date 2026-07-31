@@ -21,6 +21,7 @@
 		"react-router-dom": "^6.30.0"
 	},
 	"devDependencies": {
+		"@axe-core/playwright": "^4.12.1",
 		"@happy-dom/global-registrator": "^20.10.0",
 		"@playwright/test": "^1.61.1",
 		"@testing-library/jest-dom": "^6.6.3",

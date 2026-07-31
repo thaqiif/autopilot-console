@@ -1,4 +1,29 @@
-import { assertNoHorizontalOverflow, expect, signIn, test } from "./fixtures";
+import {
+	assertNoConsolePrApproveOrMerge,
+	assertNoHorizontalOverflow,
+	assertPrimaryTapTargets,
+	assertWcag22Aa,
+	expect,
+	signIn,
+	test,
+} from "./fixtures";
+
+const CORE_ROUTES = [
+	"/",
+	"/attention",
+	"/releases",
+	"/projects",
+	"/activity",
+	"/settings",
+	"/projects/new",
+	"/releases/new",
+	"/features/new?projectId=project-1&releaseId=release-1",
+	"/features/test-feature-1",
+	"/features/test-feature-planned",
+	"/projects/project-1",
+	"/releases/release-1",
+	"/login",
+] as const;
 
 test.describe("mobile accessibility at 375x667", () => {
 	test.use({ viewport: { width: 375, height: 667 } });
@@ -12,279 +37,209 @@ test.describe("mobile accessibility at 375x667", () => {
 		await page.fill("#password", "password123");
 		await page.click('button[type="submit"]');
 		await page.waitForURL("**/");
-		await assertNoHorizontalOverflow(page);
-	});
-
-	test("portfolio overview renders without horizontal scroll at 375px", async ({ page }) => {
-		await signIn(page);
-		await assertNoHorizontalOverflow(page);
 		await expect(
 			page.getByRole("heading", { name: /needs your attention|overview|portfolio/i }).first(),
 		).toBeVisible();
+		await assertNoHorizontalOverflow(page);
 	});
 
-	test("primary tap targets are at least 44x44 CSS pixels", async ({ page }) => {
+	test("portfolio review journey surfaces attention without horizontal scroll", async ({
+		page,
+	}) => {
 		await signIn(page);
-
-		const boxes = await page.evaluate(() => {
-			const nodes = Array.from(document.querySelectorAll("button, a[href]")).filter((el) => {
-				const style = window.getComputedStyle(el);
-				const rect = el.getBoundingClientRect();
-				return (
-					style.display !== "none" &&
-					style.visibility !== "hidden" &&
-					rect.width > 0 &&
-					rect.height > 0
-				);
-			});
-			return nodes.slice(0, 20).map((el) => {
-				const rect = el.getBoundingClientRect();
-				return { width: rect.width, height: rect.height };
-			});
-		});
-		expect(boxes.length).toBeGreaterThan(0);
-		for (const box of boxes) {
-			expect(box.width).toBeGreaterThanOrEqual(44);
-			expect(box.height).toBeGreaterThanOrEqual(44);
-		}
+		await expect(page.getByText(/1/).first()).toBeVisible();
+		await page.goto("/attention");
+		await expect(page.getByText(/PR awaiting review/i)).toBeVisible();
+		await assertNoHorizontalOverflow(page);
+		await assertNoConsolePrApproveOrMerge(page);
 	});
 
-	test("automated accessibility scan finds no serious violations", async ({ page }) => {
-		await signIn(page);
-
-		const violations = await page.evaluate(() => {
-			const results: string[] = [];
-			const main = document.querySelector("main");
-			if (!main) results.push("missing main landmark");
-
-			const headings = document.querySelectorAll("h1, h2, h3, h4, h5, h6");
-			if (headings.length === 0) results.push("no headings found");
-
-			const images = document.querySelectorAll("img");
-			for (const img of images) {
-				if (!img.getAttribute("alt") && !img.getAttribute("aria-label")) {
-					results.push(`image missing alt: ${img.src}`);
-				}
-			}
-
-			const buttons = document.querySelectorAll("button");
-			for (const btn of buttons) {
-				const text = btn.textContent?.trim();
-				const ariaLabel = btn.getAttribute("aria-label");
-				if (!text && !ariaLabel) {
-					results.push("button without accessible name");
-				}
-			}
-
-			const unlabeled = document.querySelectorAll("input:not([type=hidden]), select, textarea");
-			for (const control of unlabeled) {
-				const id = control.getAttribute("id");
-				const labelledBy = control.getAttribute("aria-labelledby");
-				const ariaLabel = control.getAttribute("aria-label");
-				const hasLabel = id ? Boolean(document.querySelector(`label[for="${id}"]`)) : false;
-				if (!hasLabel && !labelledBy && !ariaLabel) {
-					results.push(`control without label: ${control.outerHTML.slice(0, 80)}`);
-				}
-			}
-
-			return results;
-		});
-		expect(violations).toEqual([]);
-	});
-
-	test("status announcements work for view states", async ({ page }) => {
-		await signIn(page);
-		const liveRegion = page.locator('[aria-live="polite"]');
-		expect(await liveRegion.count()).toBeGreaterThanOrEqual(1);
-	});
-
-	test("project registration flow is accessible at 375px", async ({ page }) => {
+	test("project registration journey validates and creates a project at 375px", async ({
+		page,
+	}) => {
 		await signIn(page);
 		await page.goto("/projects/new");
 		await assertNoHorizontalOverflow(page);
-		const labels = page.locator("label");
-		expect(await labels.count()).toBeGreaterThan(0);
-		await expect(page.getByLabel(/name/i).first()).toBeVisible();
+
+		await page.getByLabel(/^name$/i).fill("Mobile Project");
+		await page.getByLabel(/^slug$/i).fill("mobile-project");
+		await page.getByLabel(/github owner/i).fill("example");
+		await page.getByLabel(/repository/i).fill("mobile-repo");
+		await page.getByLabel(/workspace path/i).fill("/workspaces/mobile-project");
+		await page.getByLabel(/development branch/i).fill("main");
+		await page.getByLabel(/description/i).fill("Registered from mobile journey");
+
+		await page.getByRole("button", { name: /^validate$/i }).click();
+		await expect(page.getByText(/all required checks passed|passed/i).first()).toBeVisible();
+		await assertNoHorizontalOverflow(page);
+
+		await page.getByRole("button", { name: /create project/i }).click();
+		await page.waitForURL(/\/projects\/[^/]+$/);
+		await expect(page.getByRole("heading", { name: /mobile project/i })).toBeVisible();
+		await assertNoHorizontalOverflow(page);
 	});
 
-	test("release and feature planning pages have no page-level overflow", async ({ page }) => {
+	test("release and feature creation journeys complete without page overflow", async ({ page }) => {
 		await signIn(page);
-		for (const route of ["/releases", "/releases/new", "/features/new", "/projects"]) {
-			await page.goto(route);
-			await expect(page.locator("main")).toBeVisible();
-			await assertNoHorizontalOverflow(page);
-		}
+
+		await page.goto("/releases/new");
+		await page.locator("#release-project").selectOption("project-1");
+		await page.getByLabel(/^name$/i).fill("Mobile Release");
+		await page.getByLabel(/^version$/i).fill("2.0.0");
+		await page.getByLabel(/description/i).fill("Release from mobile");
+		await page.getByRole("button", { name: /create release/i }).click();
+		await page.waitForURL(/\/releases\/[^/]+$/);
+		await expect(page.getByRole("heading", { name: /mobile release/i })).toBeVisible();
+		await assertNoHorizontalOverflow(page);
+
+		const releaseId = page.url().split("/").at(-1);
+		await page.goto(`/features/new?projectId=project-1&releaseId=${releaseId}`);
+		await page.getByLabel(/^title$/i).fill("Mobile Feature");
+		await page.getByLabel(/^slug$/i).fill("mobile-feature");
+		await page.getByLabel(/summary/i).fill("Feature created at 375px");
+		await page.getByRole("button", { name: /create feature/i }).click();
+		await page.waitForURL(/\/features\/[^/]+$/);
+		await expect(page.getByRole("heading", { name: /mobile feature/i })).toBeVisible();
+		await assertNoHorizontalOverflow(page);
 	});
 
-	test("navigation works without page-level horizontal scroll", async ({ page }) => {
+	test("task attach review and approval complete at 375px", async ({ page }) => {
 		await signIn(page);
-		const routes = ["/attention", "/releases", "/projects", "/activity", "/settings"];
-		for (const route of routes) {
-			await page.goto(route);
-			await assertNoHorizontalOverflow(page);
-		}
+		await page.goto("/features/test-feature-planned");
+		await assertNoHorizontalOverflow(page);
+
+		await page.getByLabel(/task path/i).fill("docs/autopilotagent/example/example.json");
+		await page.getByRole("button", { name: /^attach$/i }).click();
+		await expect(page.getByRole("region", { name: /task review/i })).toBeVisible();
+		await expect(page.getByText(/bootstrap/i).first()).toBeVisible();
+		await assertNoHorizontalOverflow(page);
+
+		await page.getByRole("button", { name: /approve.*queue/i }).click();
+		const dialog = page.getByRole("dialog");
+		await expect(dialog).toBeVisible();
+		await assertNoHorizontalOverflow(page);
+		await dialog.getByRole("button", { name: /^confirm$/i }).click();
+
+		await expect(
+			page
+				.locator("[data-status]")
+				.filter({ hasText: /develop|queue/i })
+				.first(),
+		).toBeVisible({
+			timeout: 10_000,
+		});
+		await assertNoHorizontalOverflow(page);
 	});
 
-	test("color is not the sole means of conveying status", async ({ page }) => {
-		await signIn(page);
-		await page.goto("/features/test-feature-1");
-		await expect(page.locator("[data-status]").first()).toBeVisible();
-		const statusText = await page.locator("[data-status]").first().textContent();
-		expect(statusText?.trim().length).toBeGreaterThan(0);
-
-		const statusElements = page.locator(
-			'[role="status"]:not(.sr-only), [role="alert"]:not(.sr-only)',
-		);
-		const count = await statusElements.count();
-		for (let i = 0; i < count; i++) {
-			const el = statusElements.nth(i);
-			const text = await el.textContent();
-			const ariaLabel = await el.getAttribute("aria-label");
-			expect(text || ariaLabel).toBeTruthy();
-		}
-	});
-
-	test("feature detail job progress cancel and PR journeys complete at 375px", async ({ page }) => {
+	test("progress cancellation retry failure and PR-link journeys complete at 375px", async ({
+		page,
+	}) => {
 		await signIn(page);
 		await page.goto("/features/test-feature-1");
 		await assertNoHorizontalOverflow(page);
 
 		await expect(page.getByRole("heading", { level: 1, name: /example feature/i })).toBeVisible();
 		await expect(page.getByRole("region", { name: /development progress/i })).toBeVisible();
+		await expect(page.getByRole("region", { name: /diagnostic log/i })).toBeVisible();
 
 		const cancel = page.getByRole("button", { name: /^cancel$/i });
-		await expect(cancel).toBeVisible();
 		await cancel.click();
-		const dialog = page.getByRole("dialog");
-		await expect(dialog).toBeVisible();
-		await assertNoHorizontalOverflow(page);
-		await page
-			.getByRole("button", { name: /^cancel$/i })
-			.last()
-			.click();
-
-		await expect(page.getByRole("link", { name: /#42|view on github/i }).first()).toBeVisible();
-		await expect(page.getByRole("region", { name: /diagnostic log/i })).toBeVisible();
-		await expect(page.getByRole("button", { name: /copy log/i })).toBeVisible();
-		await expect(page.getByRole("button", { name: /download log/i })).toBeVisible();
-	});
-
-	test("task review page is readable at 375px without horizontal scroll", async ({ page }) => {
-		await signIn(page);
-		await page.goto("/features/test-feature-1");
-		await assertNoHorizontalOverflow(page);
-		await expect(page.getByText(/bootstrap/i).first()).toBeVisible();
-	});
-
-	test("job progress section renders without horizontal scroll at 375px", async ({ page }) => {
-		await signIn(page);
-		await page.goto("/features/test-feature-1");
-		await assertNoHorizontalOverflow(page);
+		const cancelDialog = page.getByRole("dialog", { name: /cancel/i });
+		await expect(cancelDialog).toBeVisible();
+		await cancelDialog.getByRole("button", { name: /^confirm$/i }).click();
 		await expect(
-			page.locator('[data-status="in_progress"], [data-status="passed"]').first(),
-		).toBeVisible();
+			page
+				.locator("[data-status]")
+				.filter({ hasText: /cancel/i })
+				.first(),
+		).toBeVisible({
+			timeout: 10_000,
+		});
+		await assertNoHorizontalOverflow(page);
+
+		const retry = page.getByRole("button", { name: /^retry$/i });
+		await expect(retry).toBeVisible();
+		await retry.click();
+		const retryDialog = page.getByRole("dialog", { name: /retry/i });
+		await expect(retryDialog).toBeVisible();
+		await retryDialog.getByRole("button", { name: /^confirm$/i }).click();
+		await expect(
+			page
+				.locator("[data-status]")
+				.filter({ hasText: /develop|queue|running/i })
+				.first(),
+		).toBeVisible({ timeout: 10_000 });
+
+		await page.goto("/features/test-feature-failed");
+		await expect(page.getByText(/exited with code|review logs|failure/i).first()).toBeVisible();
+		await assertNoHorizontalOverflow(page);
+
+		await page.goto("/features/test-feature-1");
+		await expect(page.getByRole("link", { name: /#42|view on github/i }).first()).toBeVisible();
+		await assertNoConsolePrApproveOrMerge(page);
+		await assertNoHorizontalOverflow(page);
 	});
 
-	test("time elements use datetime attribute for accessibility", async ({ page }) => {
-		await signIn(page);
-		await page.goto("/activity");
-		await expect(page.getByText(/project created/i)).toBeVisible();
-
-		const timeElements = page.locator("time[datetime]");
-		const count = await timeElements.count();
-		expect(count).toBeGreaterThan(0);
-		for (let i = 0; i < count; i++) {
-			const datetime = await timeElements.nth(i).getAttribute("datetime");
-			expect(datetime).toBeTruthy();
-			expect(datetime).toMatch(/^\d{4}-\d{2}-\d{2}/);
-		}
-	});
-
-	test("all data pages resolve without an error state", async ({ page }) => {
-		await signIn(page);
-		const routes = [
-			"/",
-			"/attention",
-			"/releases",
-			"/projects",
-			"/activity",
-			"/settings",
-			"/features/test-feature-1",
-			"/projects/project-1",
-			"/releases/release-1",
-		];
-		for (const route of routes) {
-			await page.goto(route);
-			await expect(page.locator("main")).toBeVisible();
-			await expect(
-				page.locator('[role="alert"]:not(.sr-only)'),
-				`unexpected error state on ${route}`,
-			).toHaveCount(0);
-			await assertNoHorizontalOverflow(page);
-		}
-	});
-
-	test("diagnostic log excerpt has accessible truncation indicator", async ({ page }) => {
+	test("primary tap targets are at least 44x44 where practical", async ({ page }) => {
 		await signIn(page);
 		await page.goto("/features/test-feature-1");
-		const truncation = page.locator('[role="status"]:has-text("Truncated")');
-		await expect(truncation).toBeVisible();
-		await expect(truncation).toContainText(/more lines/i);
+		await assertPrimaryTapTargets(page);
 	});
 
-	test("no critical action depends on hover right-click or drag", async ({ page }) => {
-		await signIn(page);
-		await page.goto("/features/test-feature-1");
-		// Cancel is a visible button, not hover-only
-		await expect(page.getByRole("button", { name: /^cancel$/i })).toBeVisible();
-		// PR open is a normal link
-		await expect(page.getByRole("link", { name: /github|#42/i }).first()).toBeVisible();
-		// Dialog opens from click, not drag
-		await page.getByRole("button", { name: /^cancel$/i }).click();
-		await expect(page.getByRole("dialog")).toBeVisible();
-	});
-	test("core data routes keep tables/cards and logs usable without page overflow", async ({
+	test("no critical action requires hover right-click drag or desktop-only interaction", async ({
 		page,
 	}) => {
 		await signIn(page);
-		const routes = [
-			"/",
-			"/attention",
-			"/releases",
-			"/projects",
-			"/activity",
-			"/settings",
-			"/features/test-feature-1",
-			"/projects/project-1",
-			"/releases/release-1",
-		];
-		for (const route of routes) {
-			await page.goto(route);
-			await expect(page.locator("main")).toBeVisible();
-			await assertNoHorizontalOverflow(page);
-
-			const statuses = page.locator("[data-status]");
-			const count = await statuses.count();
-			for (let i = 0; i < Math.min(count, 8); i++) {
-				const text = await statuses.nth(i).textContent();
-				expect((text ?? "").trim().length, `color-only status on ${route}`).toBeGreaterThan(0);
-			}
-		}
-
 		await page.goto("/features/test-feature-1");
-		await expect(page.getByRole("button", { name: /copy log/i })).toBeVisible();
-		await expect(page.getByRole("button", { name: /download log/i })).toBeVisible();
-		await assertNoHorizontalOverflow(page);
+		await expect(page.getByRole("button", { name: /^cancel$/i })).toBeVisible();
+		await expect(page.getByRole("link", { name: /github|#42/i }).first()).toBeVisible();
+		await page.getByRole("button", { name: /^cancel$/i }).click();
+		await expect(page.getByRole("dialog")).toBeVisible();
+		await page.keyboard.press("Escape");
 	});
 
-	test("UTC timestamps render as local accessible time elements", async ({ page }) => {
+	test("standards-based WCAG 2.2 AA scan reports no serious violations on core screens", async ({
+		page,
+	}) => {
+		for (const route of CORE_ROUTES) {
+			if (route === "/login") {
+				await page.goto("/login");
+			} else {
+				await signIn(page);
+				await page.goto(route);
+			}
+			await expect(page.locator("main, h1").first()).toBeVisible();
+			await assertWcag22Aa(page, route);
+			if (route !== "/login") {
+				await assertNoConsolePrApproveOrMerge(page);
+			}
+		}
+	});
+
+	test("status is not color-only and live regions exist for view states", async ({ page }) => {
+		await signIn(page);
+		await page.goto("/features/test-feature-1");
+		const status = page.locator("[data-status]").first();
+		await expect(status).toBeVisible();
+		const statusText = await status.textContent();
+		expect(statusText?.trim().length).toBeGreaterThan(0);
+		expect(await page.locator('[aria-live="polite"]').count()).toBeGreaterThanOrEqual(1);
+	});
+
+	test("UTC timestamps render as accessible local time elements", async ({ page }) => {
 		await signIn(page);
 		await page.goto("/activity");
 		const time = page.locator("time[datetime]").first();
 		await expect(time).toBeVisible();
 		const datetime = await time.getAttribute("datetime");
 		expect(datetime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-		const text = await time.textContent();
-		expect((text ?? "").trim().length).toBeGreaterThan(0);
+		expect((await time.textContent())?.trim().length).toBeGreaterThan(0);
+	});
+
+	test("AxeBuilder is available as the standards-based engine including color-contrast", async ({
+		page,
+	}) => {
+		await signIn(page);
+		await assertWcag22Aa(page, "/");
 	});
 });

@@ -1,100 +1,201 @@
-import { expect, signIn, test } from "./fixtures";
+import {
+	assertNoConsolePrApproveOrMerge,
+	assertVisibleFocus,
+	expect,
+	signIn,
+	test,
+} from "./fixtures";
 
 test.describe("keyboard navigation", () => {
-	test("login form is fully keyboard operable", async ({ page }) => {
+	test.use({ viewport: { width: 1280, height: 800 } });
+
+	test("login form completes with keyboard only", async ({ page }) => {
 		await page.goto("/login");
 		await expect(page.locator("#username")).toBeVisible();
 
-		await page.keyboard.press("Tab");
-		const focused = await page.evaluate(() => document.activeElement?.tagName);
-		expect(["INPUT", "BUTTON", "A"]).toContain(focused);
-
-		await page.keyboard.press("Tab");
-		await page.keyboard.press("Tab");
-		await page.fill("#username", "admin");
-		await page.fill("#password", "password123");
-
+		await page.locator("#username").focus();
+		await assertVisibleFocus(page.locator("#username"));
+		await page.keyboard.type("admin");
+		await page.locator("#password").focus();
+		await page.keyboard.type("password123");
+		await page.locator('button[type="submit"]').focus();
+		await assertVisibleFocus(page.locator('button[type="submit"]'));
 		await page.keyboard.press("Enter");
 		await page.waitForURL("**/");
+		await expect(page.locator("main")).toBeVisible();
 	});
 
 	test("skip-to-main-content link works", async ({ page }) => {
 		await signIn(page);
 		await page.goto("/");
-		await expect(page.locator("main")).toBeVisible();
-
 		const skip = page.locator("a.skip-link");
 		await skip.focus();
 		await expect(skip).toBeFocused();
 		await page.keyboard.press("Enter");
-		const afterSkip = await page.evaluate(() => document.activeElement?.id);
-		expect(afterSkip).toBe("main-content");
+		await expect(page.locator("#main-content")).toBeFocused();
 	});
 
-	test("desktop navigation is keyboard accessible", async ({ page }) => {
+	test("desktop navigation has logical keyboard order and visible focus", async ({ page }) => {
 		await signIn(page);
-
 		const nav = page.locator('nav[aria-label="Main navigation"] a');
 		const count = await nav.count();
 		expect(count).toBe(6);
-		if ((page.viewportSize()?.width ?? 0) <= 768) {
-			await expect(nav.first()).toBeHidden();
-			return;
-		}
 
 		for (let i = 0; i < count; i++) {
 			const link = nav.nth(i);
 			await link.focus();
-			const isFocused = await link.evaluate((el) => document.activeElement === el);
-			expect(isFocused).toBe(true);
+			await assertVisibleFocus(link);
 		}
 	});
 
-	test("focus is visible on all interactive elements", async ({ page }) => {
-		await signIn(page);
-
-		const interactiveElements = page.locator("a, button, input, select, textarea, [tabindex]");
-		const count = await interactiveElements.count();
-
-		for (let i = 0; i < Math.min(count, 15); i++) {
-			const el = interactiveElements.nth(i);
-			const isVisible = await el.isVisible();
-			if (!isVisible) continue;
-
-			await el.focus();
-			const outlineStyle = await el.evaluate((node) => {
-				const style = window.getComputedStyle(node);
-				return {
-					outlineStyle: style.outlineStyle,
-					outlineWidth: style.outlineWidth,
-					outlineColor: style.outlineColor,
-				};
-			});
-			const hasFocusIndicator =
-				outlineStyle.outlineStyle !== "none" || outlineStyle.outlineWidth !== "0px";
-			expect(hasFocusIndicator).toBe(true);
-		}
-	});
-
-	test("breadcrumbs are navigable by keyboard", async ({ page }) => {
+	test("project registration workflow completes with keyboard only", async ({ page }) => {
 		await signIn(page);
 		await page.goto("/projects");
+		await page.locator('a[href="/projects/new"]').first().focus();
+		await page.keyboard.press("Enter");
+		await page.waitForURL("**/projects/new");
 
-		const breadcrumbNav = page.locator('nav[aria-label="Breadcrumb"]');
-		const links = breadcrumbNav.locator("a");
-		const linkCount = await links.count();
+		await page.locator("#project-name").focus();
+		await page.keyboard.type("Keyboard Project");
+		await page.locator("#project-slug").focus();
+		await page.keyboard.type("keyboard-project");
+		await page.locator("#project-github-owner").focus();
+		await page.keyboard.type("example");
+		await page.locator("#project-github-repo").focus();
+		await page.keyboard.type("keyboard-repo");
+		await page.locator("#project-workspace-path").focus();
+		await page.keyboard.type("/workspaces/keyboard-project");
+		await page.locator("#project-development-branch").focus();
+		await page.keyboard.type("main");
 
-		for (let i = 0; i < linkCount; i++) {
-			const link = links.nth(i);
-			await link.focus();
-			const isFocused = await link.evaluate((el) => document.activeElement === el);
-			expect(isFocused).toBe(true);
-		}
+		await page.getByRole("button", { name: /^validate$/i }).focus();
+		await page.keyboard.press("Enter");
+		await expect(page.getByText(/all required checks passed|passed/i).first()).toBeVisible();
+
+		await page.getByRole("button", { name: /create project/i }).focus();
+		await page.keyboard.press("Enter");
+		await page.waitForURL(/\/projects\/[^/]+$/);
+		await expect(page.getByRole("heading", { name: /keyboard project/i })).toBeVisible();
 	});
 
-	test("no focus traps exist in main content", async ({ page }) => {
+	test("release and feature creation complete with keyboard only", async ({ page }) => {
 		await signIn(page);
+		await page.goto("/releases/new");
+		await page.locator("#release-project").focus();
+		await page.keyboard.press("ArrowDown");
+		await page.keyboard.press("Enter");
+		await page.locator("#release-name").focus();
+		await page.keyboard.type("Keyboard Release");
+		await page.locator("#release-version").focus();
+		await page.keyboard.type("3.0.0");
+		await page.getByRole("button", { name: /create release/i }).focus();
+		await page.keyboard.press("Enter");
+		await page.waitForURL(/\/releases\/[^/]+$/);
+		await expect(page.getByRole("heading", { name: /keyboard release/i })).toBeVisible();
 
+		const releaseId = page.url().split("/").at(-1);
+		await page.goto(`/features/new?projectId=project-1&releaseId=${releaseId}`);
+		await page.locator("#feature-title").focus();
+		await page.keyboard.type("Keyboard Feature");
+		await page.locator("#feature-slug").focus();
+		await page.keyboard.type("keyboard-feature");
+		await page.getByRole("button", { name: /create feature/i }).focus();
+		await page.keyboard.press("Enter");
+		await page.waitForURL(/\/features\/[^/]+$/);
+		await expect(page.getByRole("heading", { name: /keyboard feature/i })).toBeVisible();
+	});
+
+	test("task review approval cancel and retry complete with keyboard only", async ({ page }) => {
+		await signIn(page);
+		await page.goto("/features/test-feature-planned");
+
+		await page.locator("#task-path").focus();
+		await page.keyboard.type("docs/autopilotagent/example/example.json");
+		await page.getByRole("button", { name: /^attach$/i }).focus();
+		await page.keyboard.press("Enter");
+		await expect(page.getByRole("region", { name: /task review/i })).toBeVisible();
+
+		await page.getByRole("button", { name: /approve.*queue/i }).focus();
+		await page.keyboard.press("Enter");
+		const approveDialog = page.getByRole("dialog");
+		await expect(approveDialog).toBeVisible();
+		const focusInsideApprove = await page.evaluate(() => {
+			const active = document.activeElement;
+			const dialogEl = document.querySelector('[role="dialog"]');
+			return Boolean(dialogEl && active && dialogEl.contains(active));
+		});
+		expect(focusInsideApprove).toBe(true);
+		await approveDialog.getByRole("button", { name: /^confirm$/i }).focus();
+		await page.keyboard.press("Enter");
+		await expect(
+			page
+				.locator("[data-status]")
+				.filter({ hasText: /develop|queue/i })
+				.first(),
+		).toBeVisible({
+			timeout: 10_000,
+		});
+
+		await page.goto("/features/test-feature-1");
+		const cancel = page.getByRole("button", { name: /^cancel$/i });
+		await cancel.focus();
+		await page.keyboard.press("Enter");
+		const cancelDialog = page.getByRole("dialog");
+		await expect(cancelDialog).toBeVisible();
+
+		for (let i = 0; i < 6; i++) {
+			await page.keyboard.press("Tab");
+			const stillInside = await page.evaluate(() => {
+				const active = document.activeElement;
+				const dialogEl = document.querySelector('[role="dialog"]');
+				return Boolean(dialogEl && active && dialogEl.contains(active));
+			});
+			expect(stillInside).toBe(true);
+		}
+
+		await page.keyboard.press("Escape");
+		await expect(cancelDialog).toHaveCount(0);
+		const restored = await page.evaluate(() => {
+			const active = document.activeElement as HTMLElement | null;
+			return active?.tagName === "BUTTON" && /cancel/i.test(active.textContent ?? "");
+		});
+		expect(restored).toBe(true);
+
+		await cancel.focus();
+		await page.keyboard.press("Enter");
+		await page
+			.getByRole("dialog")
+			.getByRole("button", { name: /^confirm$/i })
+			.focus();
+		await page.keyboard.press("Enter");
+		await expect(
+			page
+				.locator("[data-status]")
+				.filter({ hasText: /cancel/i })
+				.first(),
+		).toBeVisible({
+			timeout: 10_000,
+		});
+
+		const retry = page.getByRole("button", { name: /^retry$/i });
+		await retry.focus();
+		await page.keyboard.press("Enter");
+		await page
+			.getByRole("dialog")
+			.getByRole("button", { name: /^confirm$/i })
+			.focus();
+		await page.keyboard.press("Enter");
+		await expect(
+			page
+				.locator("[data-status]")
+				.filter({ hasText: /develop|queue|running/i })
+				.first(),
+		).toBeVisible({ timeout: 10_000 });
+		await assertNoConsolePrApproveOrMerge(page);
+	});
+
+	test("no focus traps exist on primary routes outside modal dialogs", async ({ page }) => {
+		await signIn(page);
 		const routes = ["/", "/attention", "/releases", "/projects", "/settings"];
 		for (const route of routes) {
 			await page.goto(route);
@@ -115,129 +216,10 @@ test.describe("keyboard navigation", () => {
 
 	test("focus is restored after navigation", async ({ page }) => {
 		await signIn(page);
-
 		const attentionLink = page.locator('a[href="/attention"]:visible').first();
 		await attentionLink.focus();
 		await page.keyboard.press("Enter");
 		await page.waitForURL("**/attention");
-
-		const heading = page.locator("h1, h2");
-		await expect(heading.first()).toBeVisible();
-	});
-
-	test("project registration form is keyboard operable", async ({ page }) => {
-		await signIn(page);
-		await page.goto("/projects/new");
-
-		const inputs = page.locator("input, select, textarea");
-		const count = await inputs.count();
-		for (let i = 0; i < count; i++) {
-			const input = inputs.nth(i);
-			const isVisible = await input.isVisible();
-			if (!isVisible) continue;
-			await input.focus();
-			const isFocused = await input.evaluate((el) => document.activeElement === el);
-			expect(isFocused).toBe(true);
-		}
-	});
-
-	test("release creation form is keyboard operable", async ({ page }) => {
-		await signIn(page);
-		await page.goto("/releases/new");
-
-		const inputs = page.locator("input, select, textarea");
-		const count = await inputs.count();
-		for (let i = 0; i < count; i++) {
-			const input = inputs.nth(i);
-			const isVisible = await input.isVisible();
-			if (!isVisible) continue;
-			await input.focus();
-			const isFocused = await input.evaluate((el) => document.activeElement === el);
-			expect(isFocused).toBe(true);
-		}
-	});
-
-	test("settings page is keyboard navigable", async ({ page }) => {
-		await signIn(page);
-		await page.goto("/settings");
-
-		const interactiveElements = page.locator("a, button, input, select, textarea");
-		const count = await interactiveElements.count();
-		for (let i = 0; i < Math.min(count, 15); i++) {
-			const el = interactiveElements.nth(i);
-			const isVisible = await el.isVisible();
-			if (!isVisible) continue;
-			await el.focus();
-			const isFocused = await el.evaluate((node) => document.activeElement === node);
-			expect(isFocused).toBe(true);
-		}
-	});
-
-	test("cancel confirmation dialog traps focus and restores it", async ({ page }) => {
-		await signIn(page);
-		await page.goto("/features/test-feature-1");
-
-		const cancel = page.getByRole("button", { name: /^cancel$/i });
-		await cancel.focus();
-		await page.keyboard.press("Enter");
-
-		const dialog = page.getByRole("dialog");
-		await expect(dialog).toBeVisible();
-
-		const focusInside = await page.evaluate(() => {
-			const active = document.activeElement;
-			const dialogEl = document.querySelector('[role="dialog"]');
-			return Boolean(dialogEl && active && dialogEl.contains(active));
-		});
-		expect(focusInside).toBe(true);
-
-		// Tabbing should keep focus inside the dialog
-		for (let i = 0; i < 6; i++) {
-			await page.keyboard.press("Tab");
-			const stillInside = await page.evaluate(() => {
-				const active = document.activeElement;
-				const dialogEl = document.querySelector('[role="dialog"]');
-				return Boolean(dialogEl && active && dialogEl.contains(active));
-			});
-			expect(stillInside).toBe(true);
-		}
-
-		await page.keyboard.press("Escape");
-		await expect(dialog).toHaveCount(0);
-
-		const restored = await page.evaluate(() => {
-			const active = document.activeElement as HTMLElement | null;
-			return active?.tagName === "BUTTON" && /cancel/i.test(active.textContent ?? "");
-		});
-		expect(restored).toBe(true);
-	});
-
-	test("primary desktop workflows complete with keyboard only", async ({ page }) => {
-		await page.goto("/login");
-		await page.locator("#username").focus();
-		await page.keyboard.type("admin");
-		await page.locator("#password").focus();
-		await page.keyboard.type("password123");
-		await page.locator('button[type="submit"]').focus();
-		await page.keyboard.press("Enter");
-		await page.waitForURL("**/");
-
-		const skip = page.locator("a.skip-link");
-		await skip.focus();
-		await page.keyboard.press("Enter");
-		await expect(page.locator("#main-content")).toBeFocused();
-
-		await page.goto("/projects");
-		await page.locator('a[href="/projects/new"]').first().focus();
-		await page.keyboard.press("Enter");
-		await page.waitForURL("**/projects/new");
-		await expect(page.locator("form")).toBeVisible();
-
-		await page.goto("/features/test-feature-1");
-		await page.getByRole("button", { name: /^cancel$/i }).focus();
-		await page.keyboard.press("Enter");
-		await expect(page.getByRole("dialog")).toBeVisible();
-		await page.keyboard.press("Escape");
-		await expect(page.getByRole("dialog")).toHaveCount(0);
+		await expect(page.locator("h1, h2").first()).toBeVisible();
 	});
 });
