@@ -1,3 +1,5 @@
+import { Link } from "react-router-dom";
+
 export interface AttentionCardProps {
 	projectId: string;
 	releaseId?: string;
@@ -7,6 +9,8 @@ export interface AttentionCardProps {
 	age: string;
 	category: string;
 	primaryAction: string;
+	href?: string;
+	external?: boolean;
 	onAction?: () => void;
 }
 
@@ -18,13 +22,15 @@ export function AttentionCard({
 	state,
 	age,
 	primaryAction,
+	href,
+	external,
 	onAction,
 }: AttentionCardProps) {
 	return (
 		<article className="attention-card" aria-label={reason}>
 			<header>
 				<span className="project-id">{projectId}</span>
-				{releaseId && <span className="release-id">{releaseId}</span>}
+				{releaseId ? <span className="release-id">{releaseId}</span> : null}
 				<span className="feature-id">{featureId}</span>
 			</header>
 			<p className="reason">{reason}</p>
@@ -34,9 +40,21 @@ export function AttentionCard({
 				<dt>Age</dt>
 				<dd>{age}</dd>
 			</dl>
-			<button type="button" onClick={onAction}>
-				{primaryAction}
-			</button>
+			{href ? (
+				external ? (
+					<a href={href} target="_blank" rel="noopener noreferrer" onClick={onAction}>
+						{primaryAction}
+					</a>
+				) : (
+					<Link to={href} onClick={onAction}>
+						{primaryAction}
+					</Link>
+				)
+			) : (
+				<button type="button" onClick={onAction}>
+					{primaryAction}
+				</button>
+			)}
 		</article>
 	);
 }

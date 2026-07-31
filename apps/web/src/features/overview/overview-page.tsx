@@ -1,7 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { createSseClient } from "../../api/sse";
+import { useAuth } from "../../auth/auth-provider";
 import { ViewState } from "../../components/feedback/view-state";
 import { SummaryCard } from "../../components/metrics/summary-card";
+import { formatLocalDateTime, formatRelativeTime } from "../../time/local-date-time";
 import { AttentionCard } from "../attention/attention-card";
+import { type AttentionItemInput, toAttentionCardModel } from "../attention/attention-model";
 
 interface OverviewMetrics {
 	projectCount: number;
@@ -14,25 +18,16 @@ interface OverviewMetrics {
 	developmentMergedReleases: number;
 }
 
-interface AttentionItem {
-	projectId: string;
-	releaseId?: string;
-	featureId: string;
-	reason: string;
-	state: string;
-	age: string;
-	category: string;
-	primaryAction: string;
-}
-
 interface ActivityEvent {
 	id: string;
-	projectId?: string;
-	featureId?: string;
+	projectId?: string | null;
+	featureId?: string | null;
 	type: string;
 	summary: string;
 	occurredAt: string;
 }
+
+type PageState = "loading" | "ready" | "error" | "stale" | "unauthorized";
 
 const DEFAULT_METRICS: OverviewMetrics = {
 	projectCount: 0,
@@ -45,53 +40,95 @@ const DEFAULT_METRICS: OverviewMetrics = {
 	developmentMergedReleases: 0,
 };
 
+function isUnauthorized(result: { ok: boolean; error?: { code?: string; httpStatus?: number } }) {
+	return !result.ok && (result.error?.code === "UNAUTHORIZED" || result.error?.httpStatus === 401);
+}
+
 export function OverviewPage() {
+	const { client } = useAuth();
 	const [metrics, setMetrics] = useState<OverviewMetrics>(DEFAULT_METRICS);
-	const [attention, setAttention] = useState<AttentionItem[]>([]);
+	const [attention, setAttention] = useState<ReturnType<typeof toAttentionCardModel>[]>([]);
 	const [activity, setActivity] = useState<ActivityEvent[]>([]);
-	const [state, setState] = useState<"loading" | "ready" | "error" | "stale">("loading");
+	const [state, setState] = useState<PageState>("loading");
 	const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-	useEffect(() => {
-		async function loadData() {
+	const loadData = useCallback(
+		async (options?: { preserveReady?: boolean }) => {
+			if (!options?.preserveReady) {
+				setState((current) => (current === "ready" || current === "stale" ? "stale" : "loading"));
+			}
 			try {
 				const [metricsRes, attentionRes, activityRes] = await Promise.all([
-					fetch("/api/overview", { credentials: "include" }),
-					fetch("/api/attention", { credentials: "include" }),
-					fetch("/api/activity?limit=5", { credentials: "include" }),
+					client.get<OverviewMetrics>("/api/overview"),
+					client.get<{ items: AttentionItemInput[] }>("/api/attention"),
+					client.get<{ items: ActivityEvent[] }>("/api/activity?limit=5"),
 				]);
 
-				if (metricsRes.status === 401 || attentionRes.status === 401) {
+				if (
+					isUnauthorized(metricsRes) ||
+					isUnauthorized(attentionRes) ||
+					isUnauthorized(activityRes)
+				) {
+					setState("unauthorized");
+					return;
+				}
+
+				if (!metricsRes.ok || !attentionRes.ok || !activityRes.ok) {
 					setState("error");
 					return;
 				}
 
-				if (metricsRes.ok) {
-					setMetrics(await metricsRes.json());
-				}
-				if (attentionRes.ok) {
-					const data = await attentionRes.json();
-					setAttention(data.items ?? []);
-				}
-				if (activityRes.ok) {
-					const data = await activityRes.json();
-					setActivity(data.items ?? []);
-				}
+				setMetrics(metricsRes.data);
+				setAttention(
+					attentionRes.data.items.map((item) => {
+						const model = toAttentionCardModel(item);
+						return {
+							...model,
+							age: item.age ?? formatRelativeTime(item.ageBasis ?? model.age),
+						};
+					}),
+				);
+				setActivity(activityRes.data.items);
 				setLastUpdated(new Date());
 				setState("ready");
 			} catch {
 				setState("error");
 			}
-		}
+		},
+		[client],
+	);
 
-		loadData();
-	}, []);
+	useEffect(() => {
+		void loadData();
+	}, [loadData]);
+
+	useEffect(() => {
+		const sse = createSseClient({
+			url: "/api/events",
+			onDisconnect: () => {
+				setState((current) => (current === "ready" ? "stale" : current));
+				void loadData({ preserveReady: true });
+			},
+		});
+		sse.connect();
+		return () => sse.close();
+	}, [loadData]);
 
 	if (state === "loading") return <ViewState state="loading" />;
+	if (state === "unauthorized") return <ViewState state="unauthorized" />;
 	if (state === "error") return <ViewState state="error" message="Failed to load overview" />;
 
 	return (
 		<section aria-label="Portfolio overview">
+			<header className="page-header">
+				<div>
+					<h1 className="sr-only">Overview</h1>
+				</div>
+				<button type="button" onClick={() => void loadData()}>
+					Refresh
+				</button>
+			</header>
+
 			{/* 1. Attention section — appears FIRST */}
 			<section aria-label="Needs your attention">
 				<h2>Needs Your Attention</h2>
@@ -100,7 +137,7 @@ export function OverviewPage() {
 				) : (
 					<ul>
 						{attention.map((item) => (
-							<li key={item.featureId}>
+							<li key={`${item.projectId}:${item.featureId}:${item.category}`}>
 								<AttentionCard
 									projectId={item.projectId}
 									releaseId={item.releaseId}
@@ -110,6 +147,8 @@ export function OverviewPage() {
 									age={item.age}
 									category={item.category}
 									primaryAction={item.primaryAction}
+									href={item.href}
+									external={item.external}
 								/>
 							</li>
 						))}
@@ -149,7 +188,11 @@ export function OverviewPage() {
 							<li key={event.id}>
 								<span>{event.type}</span>
 								<span>{event.summary}</span>
-								<time dateTime={event.occurredAt}>{event.occurredAt}</time>
+								{event.projectId ? <span>{event.projectId}</span> : null}
+								{event.featureId ? <span>{event.featureId}</span> : null}
+								<time dateTime={event.occurredAt} title={formatLocalDateTime(event.occurredAt)}>
+									{formatRelativeTime(event.occurredAt)}
+								</time>
 							</li>
 						))}
 					</ul>
@@ -159,16 +202,9 @@ export function OverviewPage() {
 			{state === "stale" && (
 				<ViewState
 					state="stale"
-					message={`Last updated ${lastUpdated ? formatAge(lastUpdated) : "unknown"}`}
+					message={`Last updated ${lastUpdated ? formatRelativeTime(lastUpdated) : "unknown"}`}
 				/>
 			)}
 		</section>
 	);
-}
-
-function formatAge(date: Date): string {
-	const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
-	if (seconds < 60) return "just now";
-	if (seconds < 3600) return `${Math.floor(seconds / 60)} minutes ago`;
-	return `${Math.floor(seconds / 3600)} hours ago`;
 }

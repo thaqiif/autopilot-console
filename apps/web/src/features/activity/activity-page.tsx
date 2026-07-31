@@ -1,53 +1,89 @@
 import { useCallback, useEffect, useState } from "react";
+import { createSseClient } from "../../api/sse";
+import { useAuth } from "../../auth/auth-provider";
 import { ViewState } from "../../components/feedback/view-state";
+import { formatLocalDateTime, formatRelativeTime } from "../../time/local-date-time";
 
 interface ActivityEvent {
 	id: string;
-	projectId?: string;
-	featureId?: string;
+	projectId?: string | null;
+	featureId?: string | null;
 	type: string;
 	summary: string;
 	source: string;
 	occurredAt: string;
 }
 
+type PageState = "loading" | "ready" | "error" | "stale" | "unauthorized";
+
+function isUnauthorized(result: { ok: boolean; error?: { code?: string; httpStatus?: number } }) {
+	return !result.ok && (result.error?.code === "UNAUTHORIZED" || result.error?.httpStatus === 401);
+}
+
 export function ActivityPage() {
+	const { client } = useAuth();
 	const [events, setEvents] = useState<ActivityEvent[]>([]);
 	const [cursor, setCursor] = useState<string | null>(null);
 	const [hasMore, setHasMore] = useState(false);
-	const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+	const [state, setState] = useState<PageState>("loading");
 
-	const loadActivity = useCallback(async (pageCursor?: string) => {
-		try {
-			const url = pageCursor ? `/api/activity?cursor=${pageCursor}` : "/api/activity";
-			const res = await fetch(url, { credentials: "include" });
-			if (res.status === 401) {
+	const loadActivity = useCallback(
+		async (pageCursor?: string) => {
+			try {
+				const url = pageCursor ? `/api/activity?cursor=${pageCursor}` : "/api/activity";
+				const res = await client.get<{
+					items: ActivityEvent[];
+					nextCursor?: string | null;
+					cursor?: string | null;
+				}>(url);
+				if (isUnauthorized(res)) {
+					setState("unauthorized");
+					return;
+				}
+				if (!res.ok) {
+					setState("error");
+					return;
+				}
+				const next = res.data.nextCursor ?? res.data.cursor ?? null;
+				setEvents((prev) => (pageCursor ? [...prev, ...res.data.items] : res.data.items));
+				setCursor(next);
+				setHasMore(next !== null);
+				setState("ready");
+			} catch {
 				setState("error");
-				return;
 			}
-			if (res.ok) {
-				const data = await res.json();
-				const items: ActivityEvent[] = data.items ?? [];
-				setEvents((prev) => (pageCursor ? [...prev, ...items] : items));
-				setCursor(data.cursor ?? null);
-				setHasMore(!!data.cursor);
-			}
-			setState("ready");
-		} catch {
-			setState("error");
-		}
-	}, []);
+		},
+		[client],
+	);
 
 	useEffect(() => {
-		loadActivity();
+		void loadActivity();
+	}, [loadActivity]);
+
+	useEffect(() => {
+		const sse = createSseClient({
+			url: "/api/events",
+			onDisconnect: () => {
+				setState((current) => (current === "ready" ? "stale" : current));
+				void loadActivity();
+			},
+		});
+		sse.connect();
+		return () => sse.close();
 	}, [loadActivity]);
 
 	if (state === "loading") return <ViewState state="loading" />;
+	if (state === "unauthorized") return <ViewState state="unauthorized" />;
 	if (state === "error") return <ViewState state="error" message="Failed to load activity" />;
 
 	return (
 		<section aria-label="Activity">
-			<h1>Activity</h1>
+			<header className="page-header">
+				<h1>Activity</h1>
+				<button type="button" onClick={() => void loadActivity()}>
+					Refresh
+				</button>
+			</header>
 
 			{events.length === 0 ? (
 				<ViewState state="empty" message="No activity events" />
@@ -58,12 +94,12 @@ export function ActivityPage() {
 							<article>
 								<header>
 									<span>{event.type}</span>
-									{event.projectId && <span>{event.projectId}</span>}
-									{event.featureId && <span>{event.featureId}</span>}
+									{event.projectId ? <span>{event.projectId}</span> : null}
+									{event.featureId ? <span>{event.featureId}</span> : null}
 								</header>
 								<p>{event.summary}</p>
-								<time dateTime={event.occurredAt}>
-									{new Date(event.occurredAt).toLocaleString()}
+								<time dateTime={event.occurredAt} title={formatLocalDateTime(event.occurredAt)}>
+									{formatRelativeTime(event.occurredAt)}
 								</time>
 							</article>
 						</li>
@@ -71,11 +107,13 @@ export function ActivityPage() {
 				</ul>
 			)}
 
-			{hasMore && (
-				<button type="button" onClick={() => loadActivity(cursor ?? undefined)}>
+			{hasMore ? (
+				<button type="button" onClick={() => void loadActivity(cursor ?? undefined)}>
 					Load more
 				</button>
-			)}
+			) : null}
+
+			{state === "stale" ? <ViewState state="stale" message="Data may be outdated" /> : null}
 		</section>
 	);
 }

@@ -1,72 +1,94 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { createSseClient } from "../../api/sse";
+import { useAuth } from "../../auth/auth-provider";
 import { ViewState } from "../../components/feedback/view-state";
+import { formatRelativeTime } from "../../time/local-date-time";
 import { AttentionCard } from "./attention-card";
+import {
+	ATTENTION_CATEGORY_ORDER,
+	type AttentionItemInput,
+	formatAttentionCategory,
+	toAttentionCardModel,
+} from "./attention-model";
 
-interface AttentionItem {
-	projectId: string;
-	releaseId?: string;
-	featureId: string;
-	reason: string;
-	state: string;
-	age: string;
-	category: string;
-	primaryAction: string;
+type PageState = "loading" | "ready" | "error" | "stale" | "unauthorized";
+
+function isUnauthorized(result: { ok: boolean; error?: { code?: string; httpStatus?: number } }) {
+	return !result.ok && (result.error?.code === "UNAUTHORIZED" || result.error?.httpStatus === 401);
 }
 
-const CATEGORIES = [
-	"task_review",
-	"development_failed",
-	"development_interrupted",
-	"pr_creation_failed",
-	"ci_failed",
-	"pr_review",
-	"pr_changes_requested",
-	"blocked",
-] as const;
-
 export function AttentionPage() {
-	const [items, setItems] = useState<AttentionItem[]>([]);
+	const { client } = useAuth();
+	const [items, setItems] = useState<ReturnType<typeof toAttentionCardModel>[]>([]);
 	const [filter, setFilter] = useState<string | null>(null);
-	const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+	const [state, setState] = useState<PageState>("loading");
+
+	const loadAttention = useCallback(async () => {
+		try {
+			const url = filter ? `/api/attention?category=${filter}` : "/api/attention";
+			const res = await client.get<{ items: AttentionItemInput[] }>(url);
+			if (isUnauthorized(res)) {
+				setState("unauthorized");
+				return;
+			}
+			if (!res.ok) {
+				setState("error");
+				return;
+			}
+			setItems(
+				res.data.items.map((item) => {
+					const model = toAttentionCardModel(item);
+					return {
+						...model,
+						age: item.age ?? formatRelativeTime(item.ageBasis ?? model.age),
+					};
+				}),
+			);
+			setState("ready");
+		} catch {
+			setState("error");
+		}
+	}, [client, filter]);
 
 	useEffect(() => {
-		async function loadAttention() {
-			try {
-				const url = filter ? `/api/attention?category=${filter}` : "/api/attention";
-				const res = await fetch(url, { credentials: "include" });
-				if (res.status === 401) {
-					setState("error");
-					return;
-				}
-				if (res.ok) {
-					const data = await res.json();
-					setItems(data.items ?? []);
-				}
-				setState("ready");
-			} catch {
-				setState("error");
-			}
-		}
-		loadAttention();
-	}, [filter]);
+		void loadAttention();
+	}, [loadAttention]);
+
+	useEffect(() => {
+		const sse = createSseClient({
+			url: "/api/events",
+			onDisconnect: () => {
+				setState((current) => (current === "ready" ? "stale" : current));
+				void loadAttention();
+			},
+		});
+		sse.connect();
+		return () => sse.close();
+	}, [loadAttention]);
 
 	if (state === "loading") return <ViewState state="loading" />;
+	if (state === "unauthorized") return <ViewState state="unauthorized" />;
 	if (state === "error")
 		return <ViewState state="error" message="Failed to load attention items" />;
 
 	return (
 		<section aria-label="Attention">
-			<h1>Needs Your Attention</h1>
+			<header className="page-header">
+				<h1>Needs Your Attention</h1>
+				<button type="button" onClick={() => void loadAttention()}>
+					Refresh
+				</button>
+			</header>
 
 			<nav aria-label="Attention filters">
-				{CATEGORIES.map((cat) => (
+				{ATTENTION_CATEGORY_ORDER.map((cat) => (
 					<button
 						key={cat}
 						type="button"
 						aria-pressed={filter === cat}
 						onClick={() => setFilter(filter === cat ? null : cat)}
 					>
-						{formatCategory(cat)}
+						{formatAttentionCategory(cat)}
 					</button>
 				))}
 			</nav>
@@ -76,7 +98,7 @@ export function AttentionPage() {
 			) : (
 				<ul>
 					{items.map((item) => (
-						<li key={item.featureId}>
+						<li key={`${item.projectId}:${item.featureId}:${item.category}`}>
 							<AttentionCard
 								projectId={item.projectId}
 								releaseId={item.releaseId}
@@ -86,18 +108,15 @@ export function AttentionPage() {
 								age={item.age}
 								category={item.category}
 								primaryAction={item.primaryAction}
+								href={item.href}
+								external={item.external}
 							/>
 						</li>
 					))}
 				</ul>
 			)}
+
+			{state === "stale" ? <ViewState state="stale" message="Data may be outdated" /> : null}
 		</section>
 	);
-}
-
-function formatCategory(cat: string): string {
-	return cat
-		.split("_")
-		.map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-		.join(" ");
 }

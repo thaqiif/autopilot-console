@@ -22,7 +22,8 @@ export interface SseClient {
 }
 
 export function createSseClient(options: SseClientOptions): SseClient {
-	const EventSourceImpl = options.EventSourceImpl ?? EventSource;
+	const globalEventSource = typeof EventSource === "undefined" ? undefined : EventSource;
+	const EventSourceImpl = options.EventSourceImpl ?? globalEventSource;
 	const reconnectDelayMs = options.reconnectDelayMs ?? 1500;
 
 	let source: EventSource | null = null;
@@ -67,6 +68,12 @@ export function createSseClient(options: SseClientOptions): SseClient {
 	function open() {
 		if (closed) return;
 		clearReconnectTimer();
+		if (!EventSourceImpl) {
+			// Unit tests / non-browser runtimes may lack EventSource. Keep REST
+			// as the sole source of truth until a transport is available.
+			connected = false;
+			return;
+		}
 		if (source) {
 			try {
 				source.close();
