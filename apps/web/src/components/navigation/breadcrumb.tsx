@@ -1,4 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
+import { breadcrumbLabel } from "../../app/route-meta";
 
 function buildBreadcrumbs(pathname: string) {
 	const segments = pathname.split("/").filter(Boolean);
@@ -7,7 +8,7 @@ function buildBreadcrumbs(pathname: string) {
 	for (const segment of segments) {
 		current += `/${segment}`;
 		crumbs.push({
-			label: segment.charAt(0).toUpperCase() + segment.slice(1),
+			label: breadcrumbLabel(segment),
 			path: current,
 		});
 	}
@@ -44,7 +45,8 @@ export function BackLink() {
 	if (segments.length < 1) return null;
 
 	const parentPath = `/${segments.slice(0, -1).join("/")}`;
-	const parentLabel = segments.length > 1 ? segments[segments.length - 2] : "Home";
+	const parentSegment = segments.length > 1 ? segments[segments.length - 2] : undefined;
+	const parentLabel = parentSegment ? breadcrumbLabel(parentSegment) : "Home";
 
 	return (
 		<Link to={parentPath || "/"} aria-label={`Back to ${parentLabel}`}>
