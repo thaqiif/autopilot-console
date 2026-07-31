@@ -1,36 +1,29 @@
 # Autopilotagent Session Summary
 
 ## Results
-- Completed: 1 requirement in this batch (38)
+- Completed: 1 requirements (22)
 - Stuck: 0 requirements
 - Invalid tests: 0 requirements
-- Remaining: open requirements still present (22, 30, 35, 39–48 and others per task JSON)
+- Remaining: see task JSON (batch size 1)
 
 ## Completed Requirements
-- [38] Compose durable pull-request handoff and scheduled GitHub reconciliation into the production worker runtime.
+- [22] Expose truthful production liveness and readiness for the API, database, worker capacity, Autopilot runtime, and GitHub authentication.
 
 ## Stuck Requirements
 - none
 
 ## Commits Made
-- a077386 feat(worker): compose durable PR handoff and GitHub reconciliation runtime (req 38 GREEN)
-- (refactor commit follows in same session)
+- 1466078 feat(api): truthful production readiness probes for GitHub and workers (req 22)
+- 8a49b74 refactor(api): centralize readiness probe shaping and GitHub auth surface (req 22 REFACTOR)
 
 ## Files Modified
-- apps/worker/src/runtime/github-runtime.ts
-- apps/worker/src/runtime/github-runtime.integration.test.ts
-- apps/worker/src/github/pr-handoff-store.ts
-- apps/worker/src/github/pr-reconciliation-store.ts
-- apps/worker/src/github/pr-reconciliation-worker.ts
-- apps/worker/src/main.ts
-- apps/worker/src/index.ts
-- packages/database/src/repositories/workflow-repositories.ts
-- packages/database/src/index.ts
-- tests/fixtures/phase-1-seed.ts
-- docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.json
-- docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1-notes.md
-- docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1-summary.md
+- apps/api/src/main.ts
+- apps/api/src/app.integration.test.ts
+- packages/github/src/*
+- tests/fixtures/fake-external-adapters.ts
+- apps/worker GitHub fakes/runtime wrappers
+- packages/domain project-service integration fakes
 
 ## Next Steps
 - Resume with: /autopilotagent docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.json --batch 1
-- Next workable candidates include 22 (unblocked by 38), 44, and 45.
+- Next workable candidates: 39, 41, 43, 44, 45

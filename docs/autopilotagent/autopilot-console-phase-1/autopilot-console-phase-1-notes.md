@@ -1,47 +1,50 @@
 # Autopilot Console Phase 1 Progress Notes
 
 ## Current State
-- Last completed: requirement 38
+- Last completed: requirement 22
 - Working on: next workable incomplete requirement
 - Blockers: none
 
 ## Files Modified
-- apps/worker/src/runtime/github-runtime.ts (new production GitHub runtime supervisor)
-- apps/worker/src/runtime/github-runtime.integration.test.ts (production composition coverage)
-- apps/worker/src/github/pr-handoff-store.ts (Postgres PR handoff store)
-- apps/worker/src/github/pr-reconciliation-store.ts (Postgres PR reconciliation store + backoff)
-- apps/worker/src/github/pr-reconciliation-worker.ts (BLOCKED via guard owner)
-- apps/worker/src/main.ts (compose handoff + reconciliation loops)
-- apps/worker/src/index.ts (export production stores/runtime)
-- packages/database/src/repositories/workflow-repositories.ts (claimNext/complete/fail outbox)
-- packages/database/src/index.ts (export new outbox helpers)
-- tests/fixtures/phase-1-seed.ts (reuse production stores; drop duplicates)
+- apps/api/src/main.ts (production health probes: GitHub auth vs project access, safe DB probe)
+- apps/api/src/app.integration.test.ts (production readiness probe matrix)
+- packages/github/src/github-gateway.ts (ValidateAuthenticationResult + GitHubGateway method)
+- packages/github/src/gh-cli-gateway.ts (validateAuthentication implementation)
+- packages/github/src/index.ts (export ValidateAuthenticationResult)
+- packages/github/src/gh-cli-gateway.test.ts (surface includes validateAuthentication)
+- tests/fixtures/fake-external-adapters.ts (fake GitHub auth)
+- apps/worker/src/runtime/github-runtime.ts (forward validateAuthentication)
+- apps/worker/src/runtime/github-runtime.integration.test.ts
+- apps/worker/src/github/pr-handoff-worker.integration.test.ts
+- apps/worker/src/github/pr-reconciliation-worker.integration.test.ts
+- packages/domain/src/project/project-service.integration.test.ts
 
 ## Session Log
-- [2026-07-31] Completed requirement 38: durable PR handoff and scheduled GitHub reconciliation in production worker
-- [2026-07-31] Workable open set after 38: 44, 45 (and unblocked dependents of 38 once their other deps pass)
+- [2026-07-31] Completed requirement 22: truthful production liveness and readiness probes
+- [2026-07-31] Workable open set after 22: 39 (blocked_by 22+38 now unblocked), 41, 43, 44, 45
 
 ## Progress
 
-### Requirement 38: Compose durable pull-request handoff and scheduled GitHub reconciliation into the production worker runtime.
+### Requirement 22: Expose truthful production liveness and readiness for the API, database, worker capacity, Autopilot runtime, and GitHub authentication.
 - Started: 2026-07-31
 - Completed: 2026-07-31
 - Commits:
-  - a077386 feat(worker): compose durable PR handoff and GitHub reconciliation runtime (req 38 GREEN)
-  - (pending) refactor: dedupe PR stores into production modules (req 38 REFACTOR)
+  - 1466078 feat(api): truthful production readiness probes for GitHub and workers (req 22)
+  - 8a49b74 refactor(api): centralize readiness probe shaping and GitHub auth surface (req 22 REFACTOR)
 - Files Changed:
+  - apps/api/src/main.ts
+  - apps/api/src/app.integration.test.ts
+  - packages/github/src/github-gateway.ts
+  - packages/github/src/gh-cli-gateway.ts
+  - packages/github/src/index.ts
+  - packages/github/src/gh-cli-gateway.test.ts
+  - tests/fixtures/fake-external-adapters.ts
   - apps/worker/src/runtime/github-runtime.ts
   - apps/worker/src/runtime/github-runtime.integration.test.ts
-  - apps/worker/src/github/pr-handoff-store.ts
-  - apps/worker/src/github/pr-reconciliation-store.ts
-  - apps/worker/src/github/pr-reconciliation-worker.ts
-  - apps/worker/src/main.ts
-  - apps/worker/src/index.ts
-  - packages/database/src/repositories/workflow-repositories.ts
-  - packages/database/src/index.ts
-  - tests/fixtures/phase-1-seed.ts
+  - apps/worker/src/github/pr-handoff-worker.integration.test.ts
+  - apps/worker/src/github/pr-reconciliation-worker.integration.test.ts
+  - packages/domain/src/project/project-service.integration.test.ts
 
 ## Open requirements (selected)
-- 22 blocked_by 38 → now unblocked by 38
-- 39 blocked_by 22,38
-- 44, 45 immediately workable (no open deps)
+- 39 blocked_by 22,38 → now unblocked by 22
+- 41, 43, 44, 45 workable

@@ -1485,15 +1485,15 @@
         "test": {
           "description": "Add production-probe tests for zero-project GitHub auth, project repository access, stale/missing worker registration, worker capacity, database failure, and Autopilot failure.",
           "file": "apps/api/src/app.integration.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Separate GitHub authentication from optional project access and make every readiness dependency report truthful typed details.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Centralize probe result shaping and verify no probe returns command output or credentials.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -1501,7 +1501,7 @@
         "Run readiness with zero registered projects and an invalid GitHub session.",
         "Inspect health JSON for credentials and arbitrary adapter output."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "23",
