@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useAuth } from "../../auth/auth-provider";
+import { ConfirmDialog } from "../../components/feedback/confirm-dialog";
 import { ViewState } from "../../components/feedback/view-state";
 
 interface FeatureSummary {
@@ -114,17 +115,14 @@ export function ReleaseDetailPage() {
 			)}
 
 			{showArchiveConfirm && (
-				<div role="dialog" aria-modal="true" aria-label="Confirm archive">
-					<p>
-						Are you sure you want to archive <strong>{release.name}</strong>?
-					</p>
-					<button type="button" onClick={() => setShowArchiveConfirm(false)}>
-						Cancel
-					</button>
-					<button type="button" onClick={handleArchive} disabled={archiving}>
-						Confirm archive
-					</button>
-				</div>
+				<ConfirmDialog
+					label="Confirm archive"
+					entityName={release.name}
+					action="archive"
+					busy={archiving}
+					onCancel={() => setShowArchiveConfirm(false)}
+					onConfirm={handleArchive}
+				/>
 			)}
 
 			<section aria-label="Features">
