@@ -677,7 +677,9 @@ describe("production GitHub runtime composition", () => {
 		}
 
 		const feature = await getFeatureById(sql, seed.featureId);
-		expect(feature?.state).toBe("CI_RUNNING");
+		// Handoff lands in CI_RUNNING; a concurrent poll tick may already advance
+		// to PR_REVIEW before this assertion, so accept either post-handoff state.
+		expect(feature?.state === "CI_RUNNING" || feature?.state === "PR_REVIEW").toBe(true);
 
 		const [pr] = await sql`SELECT number FROM pull_requests WHERE feature_id = ${seed.featureId}`;
 		github.setStatus(Number(pr?.number), {

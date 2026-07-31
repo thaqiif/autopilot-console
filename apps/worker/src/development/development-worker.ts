@@ -10,6 +10,11 @@ import type {
 } from "../../../../packages/database/src/index";
 import { mapFailure } from "../../../../packages/domain/src/index";
 import type { GitGateway } from "../../../../packages/git/src/index";
+import type {
+	DiagnosticRetention,
+	RuntimeMetricEvent,
+	StructuredLogger,
+} from "../../../../packages/shared/src/index";
 import {
 	createPostgresDevelopmentWorkerStore,
 	type DevelopmentWorkerStore,
@@ -84,6 +89,12 @@ interface SharedDevelopmentWorkerOptions {
 	waitTimeoutMs?: number;
 	heartbeatScheduler?: HeartbeatScheduler;
 	now?: () => Date;
+	/** Optional structured logger; job logs include correlation/project/feature/attempt/worker. */
+	logger?: StructuredLogger;
+	/** Optional metrics sink for real job lifecycle events. */
+	onMetric?: (event: RuntimeMetricEvent) => void;
+	/** Optional diagnostic retention writer for process stdout/stderr chunks. */
+	diagnostics?: DiagnosticRetention;
 }
 
 export type DevelopmentWorkerOptions = SharedDevelopmentWorkerOptions &
@@ -125,6 +136,8 @@ export function createDevelopmentWorker(options: DevelopmentWorkerOptions): Deve
 	async function executeClaimed(
 		claimedAttempt: DevelopmentAttemptRow,
 	): Promise<DevelopmentWorkerOutcome> {
+		const startedAt = now().getTime();
+		const emit = (event: RuntimeMetricEvent) => options.onMetric?.(event);
 		const canonicalAttempt = await store.getAttempt(claimedAttempt.id);
 		if (!canonicalAttempt) {
 			return {
@@ -134,6 +147,16 @@ export function createDevelopmentWorker(options: DevelopmentWorkerOptions): Deve
 			};
 		}
 
+		emit({ type: "job_start" });
+		const jobLog = options.logger?.child({
+			workerId: options.workerId,
+			projectId: canonicalAttempt.projectId,
+			featureId: canonicalAttempt.featureId,
+			jobAttemptId: canonicalAttempt.id,
+			adapter: "autopilot",
+		});
+		jobLog?.info("development attempt claimed");
+
 		let context: DevelopmentExecutionContext;
 		try {
 			context = await preflight.prepare(claimedAttempt);
@@ -142,6 +165,13 @@ export function createDevelopmentWorker(options: DevelopmentWorkerOptions): Deve
 				error instanceof DevelopmentPreflightError
 					? error
 					: new DevelopmentPreflightError("validation", errorMessage(error));
+			if (preflightError.kind === "git" || /git/i.test(preflightError.message)) {
+				emit({ type: "adapter_error", kind: "git" });
+				jobLog?.error("preflight git failure", {
+					adapter: "git",
+					detail: preflightError.message,
+				});
+			}
 			if (preflightError.safeToFailAttempt) {
 				await store.persistFailure({
 					attemptId: canonicalAttempt.id,
@@ -154,12 +184,21 @@ export function createDevelopmentWorker(options: DevelopmentWorkerOptions): Deve
 					now: now(),
 				});
 			}
+			emit({ type: "job_fail", durationMs: Math.max(0, now().getTime() - startedAt) });
 			return {
 				kind: "blocked",
 				attemptId: canonicalAttempt.id,
 				reason: mapFailure({ kind: preflightError.kind, detail: preflightError.message }).summary,
 			};
 		}
+
+		const scopedLog = options.logger?.child({
+			workerId: options.workerId,
+			projectId: context.project.id,
+			featureId: context.feature.id,
+			jobAttemptId: context.attempt.id,
+			adapter: "autopilot",
+		});
 
 		await store.markDeveloping(context, {
 			workerRegistrationId: options.workerRegistrationId,
@@ -183,8 +222,14 @@ export function createDevelopmentWorker(options: DevelopmentWorkerOptions): Deve
 				heartbeatAt,
 				leaseExpiresAt: new Date(heartbeatAt.getTime() + leaseDurationMs),
 			});
+			scopedLog?.info("autopilot process started", {
+				adapter: "autopilot",
+				pid: handle.processIdentity.pid,
+			});
 		} catch (error) {
-			return failExecution(context.attempt, errorMessage(error));
+			const detail = errorMessage(error);
+			if (/git/i.test(detail)) emit({ type: "adapter_error", kind: "git" });
+			return failExecution(context.attempt, detail, startedAt, scopedLog);
 		}
 
 		let runResult: NormalizedRunResult;
@@ -195,7 +240,33 @@ export function createDevelopmentWorker(options: DevelopmentWorkerOptions): Deve
 				() => options.autopilot.wait(handle, { timeoutMs: options.waitTimeoutMs }),
 			);
 		} catch (error) {
-			return failExecution(context.attempt, errorMessage(error));
+			return failExecution(context.attempt, errorMessage(error), startedAt, scopedLog);
+		}
+
+		if (options.diagnostics) {
+			const correlationId = `job:${context.attempt.id}`;
+			const stdout = runResult.stdoutDiagnostic;
+			const stderr = runResult.stderrDiagnostic;
+			if (stdout) {
+				await options.diagnostics.write({
+					stream: "stdout",
+					body: stdout,
+					projectId: context.project.id,
+					featureId: context.feature.id,
+					jobAttemptId: context.attempt.id,
+					correlationId,
+				});
+			}
+			if (stderr) {
+				await options.diagnostics.write({
+					stream: "stderr",
+					body: stderr,
+					projectId: context.project.id,
+					featureId: context.feature.id,
+					jobAttemptId: context.attempt.id,
+					correlationId,
+				});
+			}
 		}
 
 		const verified = verifyDevelopmentResult(runResult);
@@ -210,6 +281,17 @@ export function createDevelopmentWorker(options: DevelopmentWorkerOptions): Deve
 				transitionOwner: "worker",
 				structuredResult: verified.result,
 				now: now(),
+			});
+			const durationMs = Math.max(0, now().getTime() - startedAt);
+			if (runResult.outcome === "interrupted") {
+				emit({ type: "job_interrupt", durationMs });
+			} else {
+				emit({ type: "job_fail", durationMs });
+			}
+			scopedLog?.warn("development attempt failed", {
+				adapter: "autopilot",
+				reason: verified.reason,
+				failureKind: verified.failureKind,
 			});
 			return {
 				kind: "failed",
@@ -227,6 +309,8 @@ export function createDevelopmentWorker(options: DevelopmentWorkerOptions): Deve
 			result: verified.result,
 			now: now(),
 		});
+		emit({ type: "job_complete", durationMs: Math.max(0, now().getTime() - startedAt) });
+		scopedLog?.info("development attempt completed", { adapter: "autopilot" });
 		return { kind: "completed", attemptId: context.attempt.id };
 	}
 
@@ -241,6 +325,8 @@ export function createDevelopmentWorker(options: DevelopmentWorkerOptions): Deve
 	async function failExecution(
 		attempt: DevelopmentAttemptRow,
 		detail: string,
+		startedAt?: number,
+		log?: StructuredLogger,
 	): Promise<DevelopmentWorkerOutcome> {
 		await store.persistFailure({
 			attemptId: attempt.id,
@@ -251,6 +337,12 @@ export function createDevelopmentWorker(options: DevelopmentWorkerOptions): Deve
 			targetState: "DEVELOPMENT_FAILED",
 			transitionOwner: "worker",
 			now: now(),
+		});
+		const durationMs = startedAt === undefined ? 0 : Math.max(0, now().getTime() - startedAt);
+		options.onMetric?.({ type: "job_fail", durationMs });
+		log?.error("development attempt process failure", {
+			adapter: "autopilot",
+			detail,
 		});
 		return {
 			kind: "failed",

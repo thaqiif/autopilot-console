@@ -106,6 +106,11 @@ export {
 	type WorkerMetrics,
 } from "./observability/metrics";
 export {
+	applyRuntimeMetricEvent,
+	PRODUCTION_DIAGNOSTIC_LIMITS,
+	type RuntimeMetricEvent,
+} from "./observability/runtime-metrics";
+export {
 	createStructuredLogger,
 	type LogContext,
 	type LogLevel,

@@ -2,12 +2,15 @@
  * Bounded diagnostic log retention for worker file storage.
  *
  * Writes redacted diagnostic chunks under a dedicated directory and prunes by
- * total size and age so the diagnostic volume cannot grow unbounded.
+ * total size and age so the diagnostic volume cannot grow unbounded. Per-attempt
+ * byte budgets are enforced with explicit truncation markers while preserving
+ * structured progress/audit correlation fields on every record.
  */
 
 import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { redactSecrets } from "../security/redaction";
+import { PRODUCTION_DIAGNOSTIC_LIMITS } from "./runtime-metrics";
 
 export interface DiagnosticFs {
 	mkdir(path: string, options?: { recursive?: boolean }): Promise<unknown>;
@@ -20,6 +23,8 @@ export interface DiagnosticFs {
 export interface DiagnosticRetentionOptions {
 	rootDir: string;
 	maxFileBytes?: number;
+	/** Cumulative diagnostic body bytes allowed for a single job attempt. */
+	maxPerAttemptBytes?: number;
 	maxTotalBytes?: number;
 	maxAgeMs?: number;
 	now?: () => Date;
@@ -41,17 +46,17 @@ export interface DiagnosticRetention {
 	readonly rootDir: string;
 }
 
-const DEFAULT_MAX_FILE_BYTES = 64 * 1024;
-const DEFAULT_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
-const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const TRUNCATION_MARKER = "\n…[TRUNCATED]";
+const TRUNCATION_MARKER = "…[TRUNCATED]";
 
-function boundBody(body: string, maxFileBytes: number): string {
+function boundBody(body: string, maxFileBytes: number): { body: string; truncated: boolean } {
 	const redacted = redactSecrets(body);
 	const encoded = Buffer.from(redacted, "utf8");
-	if (encoded.byteLength <= maxFileBytes) return redacted;
+	if (encoded.byteLength <= maxFileBytes) return { body: redacted, truncated: false };
 	const budget = Math.max(0, maxFileBytes - Buffer.byteLength(TRUNCATION_MARKER, "utf8"));
-	return `${encoded.subarray(0, budget).toString("utf8")}${TRUNCATION_MARKER}`;
+	return {
+		body: `${encoded.subarray(0, budget).toString("utf8")}${TRUNCATION_MARKER}`,
+		truncated: true,
+	};
 }
 
 function safeSegment(value: string | undefined, fallback: string): string {
@@ -63,9 +68,11 @@ export function createDiagnosticLogRetention(
 	options: DiagnosticRetentionOptions,
 ): DiagnosticRetention {
 	const rootDir = options.rootDir;
-	const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
-	const maxTotalBytes = options.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES;
-	const maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
+	const maxFileBytes = options.maxFileBytes ?? PRODUCTION_DIAGNOSTIC_LIMITS.maxFileBytes;
+	const maxPerAttemptBytes =
+		options.maxPerAttemptBytes ?? PRODUCTION_DIAGNOSTIC_LIMITS.maxPerAttemptBytes;
+	const maxTotalBytes = options.maxTotalBytes ?? PRODUCTION_DIAGNOSTIC_LIMITS.maxTotalBytes;
+	const maxAgeMs = options.maxAgeMs ?? PRODUCTION_DIAGNOSTIC_LIMITS.maxAgeMs;
 	const now = options.now ?? (() => new Date());
 	const mkdirFn = options.fs?.mkdir ?? ((path, opts) => mkdir(path, opts));
 	const readdirFn = options.fs?.readdir ?? (async (path) => (await readdir(path)) as string[]);
@@ -79,6 +86,7 @@ export function createDiagnosticLogRetention(
 	const writeFileFn =
 		options.fs?.writeFile ?? ((path, body, encoding) => writeFile(path, body, encoding));
 	let sequence = 0;
+	const attemptBytes = new Map<string, number>();
 
 	async function ensureRoot(): Promise<void> {
 		await mkdirFn(rootDir, { recursive: true });
@@ -110,23 +118,45 @@ export function createDiagnosticLogRetention(
 			await ensureRoot();
 			sequence += 1;
 			const stamp = now().toISOString().replace(/[:.]/g, "-");
+			const attemptKey = safeSegment(input.jobAttemptId, "job");
 			const name = `${[
 				stamp,
-				safeSegment(input.jobAttemptId, "job"),
+				attemptKey,
 				safeSegment(input.stream, "out"),
 				String(sequence).padStart(4, "0"),
 			].join("_")}.log`;
 			const path = join(rootDir, name);
-			const payload = JSON.stringify({
+
+			const used = attemptBytes.get(attemptKey) ?? 0;
+			const remainingAttemptBudget = Math.max(0, maxPerAttemptBytes - used);
+			const fileBudget = Math.min(maxFileBytes, remainingAttemptBudget);
+
+			let bodyText: string;
+			let truncated: boolean;
+			if (fileBudget <= 0) {
+				// Per-attempt budget exhausted — still write a structured truncation record
+				// so progress/audit correlation survives while body growth stops.
+				bodyText = TRUNCATION_MARKER;
+				truncated = true;
+			} else {
+				const bounded = boundBody(input.body, fileBudget);
+				bodyText = bounded.body;
+				truncated = bounded.truncated || Buffer.byteLength(input.body, "utf8") > fileBudget;
+			}
+
+			const payloadObject = {
 				timestamp: now().toISOString(),
 				stream: input.stream,
 				projectId: input.projectId,
 				featureId: input.featureId,
 				jobAttemptId: input.jobAttemptId,
 				correlationId: input.correlationId,
-				body: boundBody(input.body, maxFileBytes),
-			});
-			await writeFileFn(path, `${payload}\n`, "utf8");
+				truncated,
+				body: bodyText,
+			};
+			const payload = `${JSON.stringify(payloadObject)}\n`;
+			attemptBytes.set(attemptKey, used + Buffer.byteLength(bodyText, "utf8"));
+			await writeFileFn(path, payload, "utf8");
 			return path;
 		},
 		async prune() {

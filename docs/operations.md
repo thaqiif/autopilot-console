@@ -25,7 +25,7 @@ docker compose logs -f
 docker compose logs -f worker
 docker compose logs -f api
 
-# Diagnostic logs (persisted volume)
+# Diagnostic logs (persisted volume with retention)
 docker compose exec worker ls /app/logs
 ```
 
@@ -41,7 +41,7 @@ docker compose exec postgres pg_dump -U autopilot autopilot > backup-$(date +%Y%
 docker compose exec postgres pg_dump -U autopilot autopilot | gzip > backup-$(date +%Y%m%d).sql.gz
 ```
 
-### Database Recovery
+### Database Restore
 
 ```bash
 # Restore from backup
@@ -59,17 +59,19 @@ docker run --rm -v autopilot-console_postgres-data:/data -v $(pwd):/backup alpin
     tar czf /backup/postgres-data-$(date +%Y%m%d).tar.gz -C /data .
 ```
 
-## Cancellation and Interruption Handling
+## Cancellation and Escalation
 
 ### Cancelling a Running Job
 
-Jobs can be cancelled from the web UI or API. The cancellation process:
+Jobs can be cancelled from the web UI or API. Production composition consumes
+durable `CANCEL_REQUESTED` commands on the owning worker:
 
 1. API receives cancel intent and marks the feature transition
-2. Worker sends SIGUSR1 to the autopilotagent process
-3. After grace period, SIGTERM is sent to the process tree
-4. If still alive after escalation, SIGKILL is sent
-5. The attempt is marked as cancelled and the feature returns to the queue
+2. The worker job-command loop claims the owned attempt
+3. Worker sends SIGUSR1 to the autopilotagent process
+4. After the grace period, SIGTERM is sent to the process tree
+5. If still alive after escalation, SIGKILL is sent
+6. The attempt is marked cancelled and metrics record `job_cancel`
 
 ### Handling Interruptions
 
@@ -79,12 +81,44 @@ If the worker process dies unexpectedly:
 2. Processes without a live PID are marked as `interrupted`
 3. Interrupted jobs can be retried from the web UI
 4. Retry creates a new immutable attempt linked to the predecessor
+5. Metrics record `job_interrupt` when an interrupted outcome is observed
 
 ### Process Tree Safety
 
 - PID reuse is detected via `/proc/{pid}/stat` starttime comparison
 - Cancellation never kills unrelated processes
 - Escalation follows SIGUSR1 → SIGTERM → SIGKILL with grace periods
+
+## Retry
+
+Safe retries are worker-owned. The API records durable retry intent; the worker
+verifies process-tree liveness before enqueueing a successor attempt. Retries
+never re-use a process identity from a previous attempt.
+
+## GitHub Reconciliation
+
+Production workers compose PR handoff and GitHub reconciliation:
+
+1. Durable `create_pr` outbox intents are claimed and processed by the handoff worker
+2. Open pull requests are polled on the configured `GITHUB_POLL_INTERVAL`
+3. Current-head CI and review observations update feature state monotonically
+4. Adapter failures increment Git or GitHub error metrics and record polling lag
+5. Stale observations cannot overwrite newer head or poll state
+
+## Diagnostics and Retention
+
+Worker diagnostic files live under `/app/logs` (Compose volume `diagnostic-logs`).
+Every write is redacted before storage. Retention enforces:
+
+- **Per-file body cap:** 64 KiB with an explicit `…[TRUNCATED]` marker
+- **Per-attempt budget:** 512 KiB cumulative; further writes store structured
+  truncation records that preserve `projectId`, `featureId`, `jobAttemptId`, and
+  `correlationId` for progress and audit correlation
+- **Total volume:** 32 MiB, oldest-first prune
+- **Age:** 7 days
+
+The worker prunes on a 60-second cadence and emits a structured log when files
+are removed.
 
 ## Safe Upgrades
 
@@ -110,7 +144,7 @@ docker compose down
 docker compose up -d postgres
 sleep 5
 docker compose exec postgres pg_isready
-docker compose run --rm api bun run packages/database/src/migrate.ts
+docker compose run --rm migrate
 
 # 5. Start the full stack
 docker compose up -d
@@ -185,8 +219,13 @@ All services emit JSON-formatted log entries with:
 - `timestamp` — ISO-8601 UTC
 - `level` — debug, info, warn, error
 - `message` — human-readable description
-- `context` — correlation ID, project/feature/job identifiers (sensitive fields redacted)
+- `context` — correlation ID, project/feature/job identifiers, adapter, and
+  worker identity (sensitive fields redacted)
 
 ### Metrics
 
-The worker exposes runtime metrics including queue depth, active jobs, heartbeat age, adapter errors, polling lag, and attention counts. Metrics are available through the health endpoints and structured logs.
+Runtime metrics are updated from real API and worker operations, including queue
+depth, active jobs, oldest queued age, heartbeat age, job durations,
+interruptions, Git/GitHub adapter errors, polling lag, and attention counts.
+Metrics appear in worker structured logs (`worker metrics`) and inform health
+probes that observe registration heartbeat and capacity.

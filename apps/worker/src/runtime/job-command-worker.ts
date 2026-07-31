@@ -14,6 +14,7 @@ import type {
 	Sql,
 } from "../../../../packages/database/src/index";
 import { getDevelopmentAttempt, getFeatureById } from "../../../../packages/database/src/index";
+import type { RuntimeMetricEvent } from "../../../../packages/shared/src/index";
 import type { CancellationController, CancelOutcome } from "../process/cancellation-controller";
 import type { RetryOutcome, RetryRequest, RetryService } from "../process/retry-service";
 
@@ -48,6 +49,8 @@ export interface JobCommandWorkerOptions {
 	workerId?: string;
 	pollIntervalMs?: number;
 	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+	/** Optional metrics sink for cancel/retry lifecycle events. */
+	onMetric?: (event: RuntimeMetricEvent) => void;
 }
 
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -161,6 +164,9 @@ export function createJobCommandWorker(options: JobCommandWorkerOptions): JobCom
 			reason,
 			operationId,
 		);
+		if (outcome.kind === "cancelled") {
+			options.onMetric?.({ type: "job_cancel" });
+		}
 		return { attemptId: attempt.id, outcome };
 	}
 

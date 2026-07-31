@@ -13,6 +13,7 @@ import {
 } from "../../../../packages/database/src/index";
 import type { GitGateway } from "../../../../packages/git/src/index";
 import type { GitHubGateway, RepositoryRef } from "../../../../packages/github/src/index";
+import type { RuntimeMetricEvent } from "../../../../packages/shared/src/index";
 import { createPostgresPrHandoffStore } from "../github/pr-handoff-store";
 import {
 	createPRHandoffWorker,
@@ -54,6 +55,8 @@ export interface GithubRuntimeOptions {
 	/** Optional injectables for tests. */
 	handoffWorker?: PRHandoffWorker;
 	reconciliationWorker?: PRReconciliationWorker;
+	/** Optional metrics sink for Git/GitHub adapter errors and polling lag. */
+	onMetric?: (event: RuntimeMetricEvent) => void;
 }
 
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -168,6 +171,10 @@ export function createGithubRuntime(options: GithubRuntimeOptions): GithubRuntim
 		try {
 			const outcome = await handoffWorker.handoff(attemptId);
 			if (outcome.kind === "failed") {
+				const adapter: "git" | "github" = /git|push|fetch|remote/i.test(outcome.reason)
+					? "git"
+					: "github";
+				options.onMetric?.({ type: "adapter_error", kind: adapter });
 				await failOutboxIntent(sql, {
 					intentId: intent.id,
 					workerId: options.workerId,
@@ -182,6 +189,8 @@ export function createGithubRuntime(options: GithubRuntimeOptions): GithubRuntim
 			return outcome;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "unknown handoff error";
+			const adapter: "git" | "github" = /git|push|fetch|remote/i.test(message) ? "git" : "github";
+			options.onMetric?.({ type: "adapter_error", kind: adapter });
 			await failOutboxIntent(sql, {
 				intentId: intent.id,
 				workerId: options.workerId,
@@ -198,7 +207,21 @@ export function createGithubRuntime(options: GithubRuntimeOptions): GithubRuntim
 			await processPendingHandoffs();
 			const wallMs = Date.now();
 			if (wallMs - lastPollAt >= pollIntervalMs) {
-				await reconciliationWorker.pollAll();
+				const pollStarted = Date.now();
+				try {
+					await reconciliationWorker.pollAll();
+					options.onMetric?.({
+						type: "polling_lag",
+						lagMs: Math.max(0, Date.now() - pollStarted),
+					});
+				} catch (error) {
+					options.onMetric?.({ type: "adapter_error", kind: "github" });
+					options.onMetric?.({
+						type: "polling_lag",
+						lagMs: Math.max(0, Date.now() - pollStarted),
+					});
+					void error;
+				}
 				lastPollAt = wallMs;
 			}
 			await sleep(Math.min(handoffPollIntervalMs, pollIntervalMs), signal);

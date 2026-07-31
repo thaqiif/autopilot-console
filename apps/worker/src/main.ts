@@ -10,10 +10,13 @@ import {
 import { CliGitGateway } from "../../../packages/git/src/index";
 import { GhCliGateway } from "../../../packages/github/src/index";
 import {
+	applyRuntimeMetricEvent,
 	createDiagnosticLogRetention,
 	createMetricsCollector,
 	createStructuredLogger,
 	loadRuntimeConfig,
+	PRODUCTION_DIAGNOSTIC_LIMITS,
+	type RuntimeMetricEvent,
 	redactSecrets,
 } from "../../../packages/shared/src/index";
 import { createDevelopmentWorker } from "./development/development-worker";
@@ -59,6 +62,10 @@ const logger = createStructuredLogger({
 });
 const metrics = createMetricsCollector();
 
+function onMetric(event: RuntimeMetricEvent): void {
+	applyRuntimeMetricEvent(metrics, event);
+}
+
 async function validateAgentCli(agentBin: string | undefined): Promise<void> {
 	const configured = agentBin?.trim();
 	if (!configured) {
@@ -81,6 +88,10 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 	const capacity = config.worker.maxConcurrentJobs;
 	const diagnostics = createDiagnosticLogRetention({
 		rootDir: process.env.DIAGNOSTIC_LOG_DIR?.trim() || "/app/logs",
+		maxFileBytes: PRODUCTION_DIAGNOSTIC_LIMITS.maxFileBytes,
+		maxPerAttemptBytes: PRODUCTION_DIAGNOSTIC_LIMITS.maxPerAttemptBytes,
+		maxTotalBytes: PRODUCTION_DIAGNOSTIC_LIMITS.maxTotalBytes,
+		maxAgeMs: PRODUCTION_DIAGNOSTIC_LIMITS.maxAgeMs,
 	});
 	try {
 		await applyCoreMigration(database.sql);
@@ -126,6 +137,7 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 			cancellation,
 			retry,
 			reconcileOrphans: () => reconcileOrphansAtWorkerStartup(database.sql),
+			onMetric,
 		});
 		const git = new CliGitGateway();
 		const github = new GhCliGateway();
@@ -136,6 +148,9 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 			autopilot,
 			workerId,
 			workerRegistrationId: registration.id,
+			logger,
+			onMetric,
+			diagnostics,
 		});
 		const githubRuntime = createGithubRuntime({
 			sql: database.sql,
@@ -144,6 +159,7 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 			workerId,
 			pollIntervalMs: config.github.pollIntervalSeconds * 1_000,
 			handoffPollIntervalMs: IDLE_POLL_MS,
+			onMetric,
 		});
 
 		const supervisor = createConcurrentDevelopmentWorkerRuntime({
@@ -153,11 +169,11 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 			idlePollMs: IDLE_POLL_MS,
 			heartbeat: async (activeJobs) => {
 				await registrationService.heartbeat(registration.id, activeJobs);
-				metrics.setHeartbeatAge(0);
-				metrics.setActiveJobs(activeJobs, capacity);
+				onMetric({ type: "heartbeat_age", ageMs: 0 });
+				onMetric({ type: "active_jobs", count: activeJobs, maxConcurrent: capacity });
 			},
 			onActiveJobsChange: (activeJobs) => {
-				metrics.setActiveJobs(activeJobs, capacity);
+				onMetric({ type: "active_jobs", count: activeJobs, maxConcurrent: capacity });
 			},
 		});
 
@@ -172,6 +188,7 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 			agentBin: process.env.AGENT_BIN,
 			autopilotBin: process.env.AUTOPILOTAGENT_BIN,
 			healthPort: healthServer.port,
+			adapter: "worker",
 		});
 
 		let lastMetricsEmit = 0;
@@ -192,11 +209,46 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 					`.catch(() => [{ depth: 0, oldest_age: 0 }]);
 					const depth = Number(queueStats[0]?.depth ?? 0);
 					const oldestAge = Number(queueStats[0]?.oldest_age ?? 0);
-					metrics.setQueueDepth(depth, oldestAge);
+					onMetric({ type: "queue", depth, oldestAgeMs: oldestAge });
+
+					const attentionStats = await database.sql`
+						SELECT
+							count(*)::int AS pending,
+							count(*) FILTER (
+								WHERE state IN (
+									'DEVELOPMENT_FAILED',
+									'DEVELOPMENT_INTERRUPTED',
+									'PR_CREATION_FAILED',
+									'CI_FAILED',
+									'BLOCKED'
+								)
+							)::int AS urgent
+						FROM features
+						WHERE archived_at IS NULL
+							AND (
+								state IN (
+									'TASKS_REVIEW',
+									'DEVELOPMENT_FAILED',
+									'DEVELOPMENT_INTERRUPTED',
+									'PR_CREATION_FAILED',
+									'CI_FAILED',
+									'PR_REVIEW',
+									'PR_CHANGES_REQUESTED',
+									'BLOCKED'
+								)
+							)
+					`.catch(() => [{ pending: 0, urgent: 0 }]);
+					onMetric({
+						type: "attention",
+						pending: Number(attentionStats[0]?.pending ?? 0),
+						urgent: Number(attentionStats[0]?.urgent ?? 0),
+					});
+
 					logger.info("worker metrics", {
 						workerId,
 						activeJobs: supervisor.activeCount(),
 						capacity: supervisor.capacity(),
+						adapter: "worker",
 						metrics: metrics.snapshot(),
 					});
 					lastMetricsEmit = now;
@@ -208,6 +260,7 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 							workerId,
 							removed: pruned.removed,
 							remainingBytes: pruned.remainingBytes,
+							adapter: "worker",
 						});
 					}
 					lastPrune = now;
@@ -236,7 +289,7 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 			UPDATE worker_registrations SET stopped_at = now(), active_jobs = 0
 			WHERE id = ${registration.id}
 		`;
-		logger.info("worker stopped", { workerId });
+		logger.info("worker stopped", { workerId, adapter: "worker" });
 	} finally {
 		await database.end();
 	}
@@ -264,7 +317,7 @@ if (import.meta.main) {
 	process.once("SIGINT", () => controller.abort());
 	runWorker(controller.signal).catch((error) => {
 		const detail = error instanceof Error ? redactSecrets(error.message) : "unknown worker error";
-		logger.error("worker stopped", { detail });
+		logger.error("worker stopped", { detail, adapter: "worker" });
 		process.exit(1);
 	});
 }

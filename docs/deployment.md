@@ -1,9 +1,9 @@
 # Deployment Guide
 
-Production-oriented Compose deployment scaffolding for Autopilot Console.
-Web/API, worker, and PostgreSQL run as separate services with persistent storage
-and environment-based secrets. The stack is not yet Phase 1 qualified; the
-limitations below must be closed before treating it as production-ready.
+Production-oriented Compose deployment for Autopilot Console. Web/API, worker, and
+PostgreSQL run as separate services with persistent storage and environment-based
+secrets. Production composition wires concurrent development supervision, durable
+cancel command consumption, PR handoff, and GitHub reconciliation into the worker.
 
 ## Prerequisites
 
@@ -12,9 +12,10 @@ limitations below must be closed before treating it as production-ready.
 - An absolute host workspace path for `WORKSPACE_MOUNT`
 - An absolute `AUTOPILOTAGENT_MOUNT` directory containing executable `run.sh`;
   Compose mounts it read-only at `/opt/autopilotagent`
+- Initialize Autopilotagent once for the mounted tool distribution before first use
+  (`/opt/autopilotagent` must include the Autopilotagent CLI distribution)
 - A configured agent CLI available to the worker as `AGENT_BIN`
 - A GitHub token in `GH_TOKEN` or `GITHUB_TOKEN` for GitHub operations
-- Initialize Autopilotagent once for the mounted tool distribution before first use
 
 ## Startup
 
@@ -99,24 +100,35 @@ from the API's production mode, so clients must use HTTPS through that proxy.
 
 ## Observability
 
-API and worker entrypoints emit redacted structured JSON logs. The shared metrics
-collector can represent queue depth, active jobs, oldest age, heartbeat age,
-durations, interruptions, adapter errors, polling lag, and attention counts.
-The production worker supervisor heartbeats the actual active-job count and
-configured capacity as ownership rises and falls. Complete adapter/error and
-attention context propagation remain open requirements.
+API and worker entrypoints emit redacted structured JSON logs with correlation,
+project, feature, attempt/job, adapter, and worker context. Runtime metrics are
+updated from real operations for:
+
+- queue depth and oldest queued age
+- active jobs and configured capacity
+- registration heartbeat age
+- job durations, starts, completions, failures, cancellations, and interruptions
+- Git and GitHub adapter error counts
+- GitHub polling lag
+- attention pending and urgent counts
+
+Diagnostic retention under `diagnostic-logs` enforces documented limits:
+
+| Limit | Default | Purpose |
+| --- | ---: | --- |
+| max file body | 64 KiB (`64 * 1024`) | Per-write body cap with `…[TRUNCATED]` marker |
+| max per attempt | 512 KiB (`512 * 1024`) | Cumulative attempt body budget with structured truncation records |
+| max total volume | 32 MiB (`32 * 1024 * 1024`) | Oldest-first prune across the volume |
+| max age | 7 days | Age-based prune of diagnostic files |
+
+Structured progress and audit correlation fields (`projectId`, `featureId`,
+`jobAttemptId`, `correlationId`) are preserved even when bodies are truncated.
 
 ## Current Phase 1 limitations
 
-- The production development worker supervises up to four concurrent
-  different-project runs with accurate registration heartbeats; cancellation
-  consumption and PR runtime composition remain separate requirements.
-- Running cancellation commands are recorded by the API but are not consumed by
-  an owning-worker cancellation loop.
-- PR handoff and GitHub reconciliation components exist but are not composed into
-  `apps/worker/src/main.ts`.
-- Worker health completeness, deployment smoke tests, and aggregate release
-  qualification remain open.
+- Multi-replica workers share the database queue; capacity is per-registration.
+- Aggregate release qualification and full owner-journey e2e remain separate
+  Phase 1 requirements beyond production composition.
 
 See the Phase 1 task ledger and progress notes under
 `docs/autopilotagent/autopilot-console-phase-1` for the independently verifiable
