@@ -2556,15 +2556,15 @@
         "test": {
           "description": "Extend Compose contract tests to assert worker health, dependency conditions, mount permissions, required secrets, persistent volumes, and tool validation.",
           "file": "tests/deployment/compose-config.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Add worker health and finish Compose/image isolation, secret, volume, and tool-validation wiring.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Centralize runtime configuration names and remove unused secrets or mounts from services.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -2572,7 +2572,7 @@
         "Build every image and start the complete stack from empty volumes.",
         "Inspect mounts and environment inside each service and run every health check."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "40",
@@ -2627,15 +2627,15 @@
         "test": {
           "description": "Add production-composition tests that drive real runtime events and assert every required log/metric/retention value plus documentation contract checks for all operator procedures.",
           "file": "packages/shared/src/observability/metrics.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Update metrics from actual API/worker operations, enrich redacted logs with stable context, and reconcile operator docs with runtime behavior.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Centralize instrumentation boundaries and remove documentation claims that cannot be traced to production code.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -2643,7 +2643,7 @@
         "Force diagnostic limits and confirm bounded storage plus truncation markers.",
         "Execute deployment and recovery documentation against a fresh Compose stack."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "41",

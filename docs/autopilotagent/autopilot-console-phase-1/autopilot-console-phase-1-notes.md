@@ -1,50 +1,41 @@
 # Autopilot Console Phase 1 Progress Notes
 
 ## Current State
-- Last completed: requirement 22
+- Last completed: requirement 30
 - Working on: next workable incomplete requirement
 - Blockers: none
 
 ## Files Modified
-- apps/api/src/main.ts (production health probes: GitHub auth vs project access, safe DB probe)
-- apps/api/src/app.integration.test.ts (production readiness probe matrix)
-- packages/github/src/github-gateway.ts (ValidateAuthenticationResult + GitHubGateway method)
-- packages/github/src/gh-cli-gateway.ts (validateAuthentication implementation)
-- packages/github/src/index.ts (export ValidateAuthenticationResult)
-- packages/github/src/gh-cli-gateway.test.ts (surface includes validateAuthentication)
-- tests/fixtures/fake-external-adapters.ts (fake GitHub auth)
-- apps/worker/src/runtime/github-runtime.ts (forward validateAuthentication)
-- apps/worker/src/runtime/github-runtime.integration.test.ts
-- apps/worker/src/github/pr-handoff-worker.integration.test.ts
-- apps/worker/src/github/pr-reconciliation-worker.integration.test.ts
-- packages/domain/src/project/project-service.integration.test.ts
+- apps/api/src/main.ts (worker health detail: queueDepth, oldestQueuedAgeMs, pollingLagMs)
+- apps/api/src/app.integration.test.ts (production worker queue/poll contract test)
+- apps/web/src/features/settings/settings-page.tsx (production health Settings UI)
+- apps/web/src/features/settings/health-status.tsx (shared accessible status helpers)
+- apps/web/src/features/overview/overview-page.test.tsx (production-contract Settings tests)
+- docs/operations.md (documented health worker detail contract)
 
 ## Session Log
-- [2026-07-31] Completed requirement 22: truthful production liveness and readiness probes
-- [2026-07-31] Workable open set after 22: 39 (blocked_by 22+38 now unblocked), 41, 43, 44, 45
+- [2026-07-31] Completed requirement 30: Settings + runtime status from production health/observability contract
+- [2026-07-31] Workable open set after 30: 41, 43, 44, 45 (35 blocked by 30 now unblocked)
 
 ## Progress
 
-### Requirement 22: Expose truthful production liveness and readiness for the API, database, worker capacity, Autopilot runtime, and GitHub authentication.
+### Requirement 30: Render truthful Settings and runtime status using production health and observability APIs
 - Started: 2026-07-31
 - Completed: 2026-07-31
 - Commits:
-  - 1466078 feat(api): truthful production readiness probes for GitHub and workers (req 22)
-  - 8a49b74 refactor(api): centralize readiness probe shaping and GitHub auth surface (req 22 REFACTOR)
+  - 3067e62 test(web,api): production Settings health contract coverage (req 30 RED)
+  - 94bc260 feat(web,api): align Settings with production health contract (req 30 GREEN)
+  - 798a181 style(web): format production Settings health contract tests (req 30)
+  - 486ede7 refactor(web,api): document health contract and extract status formatting (req 30 REFACTOR)
 - Files Changed:
   - apps/api/src/main.ts
   - apps/api/src/app.integration.test.ts
-  - packages/github/src/github-gateway.ts
-  - packages/github/src/gh-cli-gateway.ts
-  - packages/github/src/index.ts
-  - packages/github/src/gh-cli-gateway.test.ts
-  - tests/fixtures/fake-external-adapters.ts
-  - apps/worker/src/runtime/github-runtime.ts
-  - apps/worker/src/runtime/github-runtime.integration.test.ts
-  - apps/worker/src/github/pr-handoff-worker.integration.test.ts
-  - apps/worker/src/github/pr-reconciliation-worker.integration.test.ts
-  - packages/domain/src/project/project-service.integration.test.ts
+  - apps/web/src/features/settings/settings-page.tsx
+  - apps/web/src/features/settings/health-status.tsx
+  - apps/web/src/features/overview/overview-page.test.tsx
+  - docs/operations.md
 
 ## Open requirements (selected)
-- 39 blocked_by 22,38 → now unblocked by 22
+- 35 unblocked by 30
 - 41, 43, 44, 45 workable
+- 42 blocked by 41; 46 blocked by 35+41; 47 blocked by 44; 48 blocked by 41-47
