@@ -15,8 +15,6 @@ autopilotagent.json
 *.spec.tsx
 tests
 biome.json
-bunfig.toml
-tsconfig.base.json
 CHANGELOG.md
 README.md
 LICENSE

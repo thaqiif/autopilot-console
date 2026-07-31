@@ -35,7 +35,7 @@ describe("GitHubGateway public API surface", () => {
 		const { gw } = gateway();
 		const g = gw as unknown as Record<string, unknown>;
 		expect(typeof g.validateAuthentication).toBe("function");
-			expect(typeof g.validateAccess).toBe("function");
+		expect(typeof g.validateAccess).toBe("function");
 		expect(typeof g.findExistingPullRequest).toBe("function");
 		expect(typeof g.createPullRequest).toBe("function");
 		expect(typeof g.getPullRequestStatus).toBe("function");

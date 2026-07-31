@@ -17,6 +17,7 @@ import {
 	redactSecrets,
 } from "../../../packages/shared/src/index";
 import { createDevelopmentWorker } from "./development/development-worker";
+import { createWorkerHealthServer } from "./health/worker-health-server";
 import { createCancellationController } from "./process/cancellation-controller";
 import { createProcessTreeInspector } from "./process/process-tree";
 import { createRetryService } from "./process/retry-service";
@@ -160,12 +161,17 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 			},
 		});
 
+		let healthReady = true;
+		const healthServer = createWorkerHealthServer({
+			isReady: () => healthReady,
+		});
 		logger.info("worker started", {
 			workerId,
 			capacity,
 			diagnosticRoot: diagnostics.rootDir,
 			agentBin: process.env.AGENT_BIN,
 			autopilotBin: process.env.AUTOPILOTAGENT_BIN,
+			healthPort: healthServer.port,
 		});
 
 		let lastMetricsEmit = 0;
@@ -214,12 +220,17 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 		// concurrently with development slots.
 		const commandLoop = jobCommands.run(signal);
 		const githubLoop = githubRuntime.run(signal);
-		await Promise.all([
-			supervisor.run(signal),
-			commandLoop,
-			githubLoop,
-			background.catch(() => undefined),
-		]);
+		try {
+			await Promise.all([
+				supervisor.run(signal),
+				commandLoop,
+				githubLoop,
+				background.catch(() => undefined),
+			]);
+		} finally {
+			healthReady = false;
+			healthServer.stop();
+		}
 
 		await database.sql`
 			UPDATE worker_registrations SET stopped_at = now(), active_jobs = 0

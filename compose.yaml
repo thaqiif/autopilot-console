@@ -28,6 +28,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-autopilot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autopilot}
@@ -36,10 +38,31 @@ services:
       WORKSPACE_ROOTS: ${WORKSPACE_ROOTS:-/projects}
       GITHUB_POLL_INTERVAL_SECONDS: ${GITHUB_POLL_INTERVAL_SECONDS:-60}
       MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-4}
+      AUTOPILOTAGENT_BIN: ${AUTOPILOTAGENT_BIN:-/opt/autopilotagent/run.sh}
       GH_TOKEN: ${GH_TOKEN:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     ports:
       - "${API_PORT:-3000}:3000"
+    volumes:
+      - ${WORKSPACE_MOUNT:-./projects}:/projects:ro
+      - ${AUTOPILOTAGENT_MOUNT:?AUTOPILOTAGENT_MOUNT is required}:/opt/autopilotagent:ro
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:3000/api/health/live');process.exit(r.ok?0:1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-autopilot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autopilot}
+    command: ["bun", "run", "packages/database/src/migrate.ts"]
 
   worker:
     build:
@@ -49,23 +72,38 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-autopilot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autopilot}
-      SESSION_SECRET: ${SESSION_SECRET}
-      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:?ADMIN_BOOTSTRAP_PASSWORD is required}
       WORKSPACE_ROOTS: ${WORKSPACE_ROOTS:-/projects}
       MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-4}
       GITHUB_POLL_INTERVAL_SECONDS: ${GITHUB_POLL_INTERVAL_SECONDS:-60}
       GH_TOKEN: ${GH_TOKEN:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      AUTOPILOTAGENT_BIN: ${AUTOPILOTAGENT_BIN:-autopilotagent}
-      AGENT_BIN: ${AGENT_BIN:-cmd}
+      AUTOPILOTAGENT_BIN: ${AUTOPILOTAGENT_BIN:-/opt/autopilotagent/run.sh}
+      AGENT_BIN: ${AGENT_BIN:?AGENT_BIN is required}
+      DIAGNOSTIC_LOG_DIR: ${DIAGNOSTIC_LOG_DIR:-/app/logs}
+      WORKER_HEALTH_PORT: ${WORKER_HEALTH_PORT:-3001}
     volumes:
       - ${WORKSPACE_MOUNT:-./projects}:/projects
       - diagnostic-logs:/app/logs
-    ports:
-      - "${WORKER_PORT:-3001}:3001"
+      - ${AUTOPILOTAGENT_MOUNT:?AUTOPILOTAGENT_MOUNT is required}:/opt/autopilotagent:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const r=await fetch('http://127.0.0.1:3001/health/live');process.exit(r.ok?0:1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   web:
     build:
@@ -73,9 +111,15 @@ services:
       dockerfile: apps/web/Dockerfile
     restart: unless-stopped
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     ports:
-      - "${WEB_PORT:-80}:80"
+      - "${WEB_PORT:-80}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/nginx-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres-data:

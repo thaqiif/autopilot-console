@@ -89,6 +89,12 @@ export {
 	createCorrelationId,
 } from "./observability/correlation";
 export {
+	createDiagnosticLogRetention,
+	type DiagnosticRetention,
+	type DiagnosticRetentionOptions,
+	type DiagnosticWriteInput,
+} from "./observability/diagnostic-retention";
+export {
 	type AdapterMetrics,
 	type AttentionMetrics,
 	createMetricsCollector,
