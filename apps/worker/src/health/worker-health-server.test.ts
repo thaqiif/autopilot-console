@@ -33,4 +33,17 @@ describe("createWorkerHealthServer", () => {
 		const response = await fetch(`http://127.0.0.1:${server.port}/`);
 		expect(response.status).toBe(404);
 	});
+
+	test("honors WORKER_HEALTH_PORT when options.port is omitted", async () => {
+		const previous = process.env.WORKER_HEALTH_PORT;
+		process.env.WORKER_HEALTH_PORT = "0";
+		try {
+			server = createWorkerHealthServer({ hostname: "127.0.0.1" });
+			const response = await fetch(`http://127.0.0.1:${server.port}/health/live`);
+			expect(response.status).toBe(200);
+		} finally {
+			if (previous === undefined) delete process.env.WORKER_HEALTH_PORT;
+			else process.env.WORKER_HEALTH_PORT = previous;
+		}
+	});
 });
