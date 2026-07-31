@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { isUnauthorized } from "../../api/result";
+import { useSseRestRefresh } from "../../api/use-sse-rest-refresh";
 import { useAuth } from "../../auth/auth-provider";
 import { ConfirmDialog } from "../../components/feedback/confirm-dialog";
 import { ViewState } from "../../components/feedback/view-state";
@@ -23,32 +25,38 @@ interface ReleaseDetail {
 	developmentProgress: { total: number; merged: number };
 }
 
+type PageState = "loading" | "ready" | "error" | "stale" | "unauthorized";
+
 export function ReleaseDetailPage() {
 	const { id } = useParams<{ id: string }>();
 	const { client } = useAuth();
 	const [release, setRelease] = useState<ReleaseDetail | null>(null);
-	const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+	const [state, setState] = useState<PageState>("loading");
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
 	const [archiving, setArchiving] = useState(false);
 
-	useEffect(() => {
-		let active = true;
-		async function load() {
-			const result = await client.get<ReleaseDetail>(`/api/releases/${id}`);
-			if (!active) return;
-			if (!result.ok) {
-				setState("error");
-				return;
-			}
-			setRelease(result.data);
-			setState("ready");
+	const load = useCallback(async () => {
+		const result = await client.get<ReleaseDetail>(`/api/releases/${id}`);
+		if (isUnauthorized(result)) {
+			setState("unauthorized");
+			return;
 		}
-		void load();
-		return () => {
-			active = false;
-		};
+		if (!result.ok) {
+			setState("error");
+			return;
+		}
+		setRelease(result.data);
+		setState("ready");
 	}, [client, id]);
+
+	useEffect(() => {
+		void load();
+	}, [load]);
+
+	useSseRestRefresh(load, {
+		onStale: () => setState((current) => (current === "ready" ? "stale" : current)),
+	});
 
 	async function handleArchive() {
 		if (!release) return;
@@ -74,6 +82,7 @@ export function ReleaseDetailPage() {
 	}
 
 	if (state === "loading") return <ViewState state="loading" />;
+	if (state === "unauthorized") return <ViewState state="unauthorized" />;
 	if (state === "error") return <ViewState state="error" message="Release not found" />;
 
 	if (!release) return null;
@@ -82,10 +91,10 @@ export function ReleaseDetailPage() {
 
 	return (
 		<section aria-label={`Release ${release.name}`}>
-			<header>
+			<header className="page-header">
 				<h1>{release.name}</h1>
 				<span>{release.version}</span>
-				<span>{release.status}</span>
+				<span data-status={release.status.toLowerCase()}>{release.status}</span>
 			</header>
 
 			{release.description && <p>{release.description}</p>}
@@ -139,18 +148,23 @@ export function ReleaseDetailPage() {
 					<ul className="entity-card-list">
 						{release.features.map((feature) => (
 							<li key={feature.id}>
-								<Link to={`/features/${feature.id}`}>
-									<article className="entity-card">
-										<h3>{feature.title}</h3>
-										<span>{feature.slug}</span>
-										<span>{feature.state}</span>
-										<span>{feature.branchName}</span>
-									</article>
-								</Link>
+								<article className="entity-card">
+									<header>
+										<Link to={`/features/${feature.id}`}>
+											<h3>{feature.title}</h3>
+										</Link>
+										<span data-status={feature.state.toLowerCase()}>
+											{feature.state.replace(/_/g, " ")}
+										</span>
+									</header>
+									<span>{feature.slug}</span>
+									<span>{feature.branchName}</span>
+								</article>
 							</li>
 						))}
 					</ul>
 				)}
+				{state === "stale" ? <ViewState state="stale" message="Data may be outdated" /> : null}
 			</section>
 		</section>
 	);

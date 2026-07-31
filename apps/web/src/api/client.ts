@@ -1,5 +1,8 @@
-import { createOperationKey, type OperationKeyParts } from "@autopilot-console/shared";
 import type { ApiResponse } from "@autopilot-console/shared/contracts/api";
+import {
+	createOperationKey,
+	type OperationKeyParts,
+} from "@autopilot-console/shared/idempotency/operation-key";
 
 export interface ApiClientOptions {
 	baseUrl: string;

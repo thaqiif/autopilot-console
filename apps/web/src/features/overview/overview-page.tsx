@@ -4,7 +4,7 @@ import { useSseRestRefresh } from "../../api/use-sse-rest-refresh";
 import { useAuth } from "../../auth/auth-provider";
 import { ViewState } from "../../components/feedback/view-state";
 import { SummaryCard } from "../../components/metrics/summary-card";
-import { formatLocalDateTime, formatRelativeTime } from "../../time/local-date-time";
+import { formatRelativeTime, LocalDateTime } from "../../time/local-date-time";
 import { AttentionCard } from "../attention/attention-card";
 import { type AttentionItemInput, toAttentionCardModel } from "../attention/attention-model";
 
@@ -162,9 +162,7 @@ export function OverviewPage() {
 								<span>{event.summary}</span>
 								{event.projectId ? <span>{event.projectId}</span> : null}
 								{event.featureId ? <span>{event.featureId}</span> : null}
-								<time dateTime={event.occurredAt} title={formatLocalDateTime(event.occurredAt)}>
-									{formatRelativeTime(event.occurredAt)}
-								</time>
+								<LocalDateTime utc={event.occurredAt} format="relative" showTimezone />
 							</li>
 						))}
 					</ul>

@@ -1,3 +1,5 @@
+import { formatElapsedMs } from "../../time/elapsed";
+import { LocalDateTime } from "../../time/local-date-time";
 import type { RequirementSummary } from "../tasks/requirement-card";
 import { RequirementCard } from "../tasks/requirement-card";
 
@@ -49,29 +51,6 @@ export interface JobProgressProps {
 	onRefresh?: () => void;
 }
 
-function formatElapsed(ms: number): string {
-	const seconds = Math.floor(ms / 1000);
-	if (seconds < 60) return `${seconds}s`;
-	const minutes = Math.floor(seconds / 60);
-	const remainingSeconds = seconds % 60;
-	if (minutes < 60) return `${minutes} min ${remainingSeconds}s`;
-	const hours = Math.floor(minutes / 60);
-	return `${hours}h ${minutes % 60}m`;
-}
-
-function formatTime(iso?: string): string {
-	if (!iso) return "—";
-	try {
-		return new Date(iso).toLocaleTimeString("en-US", {
-			hour: "2-digit",
-			minute: "2-digit",
-			hour12: false,
-		});
-	} catch {
-		return iso;
-	}
-}
-
 function toRequirementSummary(req: RequirementProgress): RequirementSummary {
 	return {
 		id: req.id,
@@ -120,9 +99,20 @@ export function JobProgress({
 			<h3>Progress</h3>
 
 			{(isStale || lastUpdate || onRefresh) && (
-				<div role={isStale ? "status" : undefined}>
-					{lastUpdate && <p>Last update: {formatTime(lastUpdate)}</p>}
-					{isStale && <p>Live updates disconnected — reconciling from persisted state.</p>}
+				<div>
+					{lastUpdate && (
+						<p>
+							Last update: <LocalDateTime utc={lastUpdate} format="time" showTimezone />
+						</p>
+					)}
+					{isStale && (
+						<div data-view-state="stale" role="status" aria-live="polite" className="view-state">
+							<span className="view-state-icon" aria-hidden="true" title="Stale">
+								↻
+							</span>
+							<p>Live updates disconnected — reconciling from persisted state.</p>
+						</div>
+					)}
 					{onRefresh && (
 						<button type="button" onClick={onRefresh}>
 							Refresh
@@ -148,7 +138,7 @@ export function JobProgress({
 
 			<dl>
 				<dt>State</dt>
-				<dd>{featureState.replace(/_/g, " ")}</dd>
+				<dd data-status={featureState.toLowerCase()}>{featureState.replace(/_/g, " ")}</dd>
 				{workerState && (
 					<>
 						<dt>Worker</dt>
@@ -158,25 +148,31 @@ export function JobProgress({
 				{queueTime && (
 					<>
 						<dt>Queued</dt>
-						<dd>{formatTime(queueTime)}</dd>
+						<dd>
+							<LocalDateTime utc={queueTime} format="time" showTimezone />
+						</dd>
 					</>
 				)}
 				{startTime && (
 					<>
 						<dt>Started</dt>
-						<dd>{formatTime(startTime)}</dd>
+						<dd>
+							<LocalDateTime utc={startTime} format="time" showTimezone />
+						</dd>
 					</>
 				)}
 				{elapsedMs != null && (
 					<>
 						<dt>Elapsed</dt>
-						<dd>{formatElapsed(elapsedMs)}</dd>
+						<dd>{formatElapsedMs(elapsedMs)}</dd>
 					</>
 				)}
 				{lastHeartbeat && (
 					<>
 						<dt>Last Heartbeat</dt>
-						<dd>{formatTime(lastHeartbeat)}</dd>
+						<dd>
+							<LocalDateTime utc={lastHeartbeat} format="time" showTimezone />
+						</dd>
 					</>
 				)}
 			</dl>
@@ -201,7 +197,7 @@ export function JobProgress({
 					<ul>
 						{recentActivity.map((evt) => (
 							<li key={evt.id}>
-								<time dateTime={evt.timestamp}>{formatTime(evt.timestamp)}</time>
+								<LocalDateTime utc={evt.timestamp} format="time" showTimezone />
 								<span>{evt.message}</span>
 							</li>
 						))}

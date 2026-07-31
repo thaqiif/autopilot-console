@@ -5,42 +5,40 @@ export interface ViewStateProps {
 	message?: string;
 }
 
+const STATE_META: Record<ViewStatus, { label: string; icon: string; role: "status" | "alert" }> = {
+	loading: { label: "Loading", icon: "…", role: "status" },
+	empty: { label: "Empty", icon: "○", role: "status" },
+	error: { label: "Error", icon: "!", role: "alert" },
+	stale: { label: "Stale", icon: "↻", role: "status" },
+	unauthorized: { label: "Unauthorized", icon: "⌀", role: "status" },
+};
+
 export function ViewState({ state, message }: ViewStateProps) {
-	switch (state) {
-		case "loading":
-			return (
-				<div role="status" aria-live="polite" aria-label="Loading">
-					<span aria-hidden="true" />
-					<p>Loading...</p>
-				</div>
-			);
-		case "empty":
-			return (
-				<div role="status" aria-live="polite">
-					<p>{message ?? "No data"}</p>
-				</div>
-			);
-		case "error":
-			return (
-				<div role="alert" aria-live="assertive" aria-label="Error">
-					<p>{message ?? "An error occurred"}</p>
-				</div>
-			);
-		case "stale":
-			return (
-				<div role="status" aria-live="polite">
-					<p>{message ?? "Data may be outdated"}</p>
-				</div>
-			);
-		case "unauthorized":
-			return (
-				<div role="status" aria-live="polite">
-					<p>Please sign in to continue</p>
-				</div>
-			);
-		default: {
-			const _exhaustive: never = state;
-			return _exhaustive;
-		}
-	}
+	const meta = STATE_META[state];
+	const text =
+		message ??
+		(state === "loading"
+			? "Loading..."
+			: state === "empty"
+				? "No data"
+				: state === "error"
+					? "An error occurred"
+					: state === "stale"
+						? "Data may be outdated"
+						: "Please sign in to continue");
+
+	// Icon + role + text (never color alone). Label is decorative; text carries the meaning.
+	return (
+		<div
+			role={meta.role}
+			aria-live={meta.role === "alert" ? "assertive" : "polite"}
+			data-view-state={state}
+			className="view-state"
+		>
+			<span className="view-state-icon" aria-hidden="true" title={meta.label}>
+				{meta.icon}
+			</span>
+			<p>{text}</p>
+		</div>
+	);
 }

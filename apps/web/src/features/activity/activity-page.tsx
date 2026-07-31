@@ -3,7 +3,7 @@ import { isUnauthorized } from "../../api/result";
 import { useSseRestRefresh } from "../../api/use-sse-rest-refresh";
 import { useAuth } from "../../auth/auth-provider";
 import { ViewState } from "../../components/feedback/view-state";
-import { formatLocalDateTime, formatRelativeTime } from "../../time/local-date-time";
+import { LocalDateTime } from "../../time/local-date-time";
 
 interface ActivityEvent {
 	id: string;
@@ -91,9 +91,7 @@ export function ActivityPage() {
 									{event.featureId ? <span>{event.featureId}</span> : null}
 								</header>
 								<p>{event.summary}</p>
-								<time dateTime={event.occurredAt} title={formatLocalDateTime(event.occurredAt)}>
-									{formatRelativeTime(event.occurredAt)}
-								</time>
+								<LocalDateTime utc={event.occurredAt} format="relative" showTimezone />
 							</article>
 						</li>
 					))}

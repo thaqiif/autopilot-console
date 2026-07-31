@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
+import { isUnauthorized } from "../../api/result";
 import { useSseRestRefresh } from "../../api/use-sse-rest-refresh";
 import { useAuth } from "../../auth/auth-provider";
 import { ViewState } from "../../components/feedback/view-state";
+import { elapsedMsBetween } from "../../time/elapsed";
 import type { AttemptRecord } from "../jobs/attempt-history";
 import { AttemptHistory } from "../jobs/attempt-history";
 import { DiagnosticLogExcerpt } from "../jobs/diagnostic-log-excerpt";
@@ -145,7 +147,7 @@ interface ProjectSummary {
 	name: string;
 }
 
-type PageState = "loading" | "ready" | "error";
+type PageState = "loading" | "ready" | "error" | "unauthorized";
 
 const JOB_STATES = new Set([
 	"QUEUED",
@@ -228,18 +230,6 @@ function mapProgressRequirements(values: unknown[] | undefined): RequirementProg
 			acceptance: summary.acceptance,
 		};
 	});
-}
-
-function elapsedFrom(
-	startTime: string | null | undefined,
-	endTime?: string | null,
-): number | undefined {
-	if (!startTime) return undefined;
-	const start = new Date(startTime).getTime();
-	if (Number.isNaN(start)) return undefined;
-	const end = endTime ? new Date(endTime).getTime() : Date.now();
-	if (Number.isNaN(end) || end < start) return undefined;
-	return end - start;
 }
 
 function mapTaskSummary(summary: ApiTaskSummary, checksum: string): TaskSnapshot {
@@ -347,6 +337,10 @@ export function FeatureDetailPage() {
 
 	const loadFeature = useCallback(async () => {
 		const result = await client.get<FeatureDetail>(`/api/features/${id}`);
+		if (isUnauthorized(result)) {
+			setPageState("unauthorized");
+			return false;
+		}
 		if (!result.ok) {
 			setPageState("error");
 			return false;
@@ -562,11 +556,13 @@ export function FeatureDetailPage() {
 	}
 
 	if (pageState === "loading") return <ViewState state="loading" />;
+	if (pageState === "unauthorized") return <ViewState state="unauthorized" />;
 	if (pageState === "error") return <ViewState state="error" message="Feature not found" />;
 	if (!feature) return null;
 
 	const hasJobData = JOB_STATES.has(feature.state);
-	const attempts: AttemptRecord[] = feature.attempts.map((attempt) => ({
+	const hasTask = Boolean(feature.taskPath || feature.taskApproval || task);
+	const attempts: AttemptRecord[] = (feature.attempts ?? []).map((attempt) => ({
 		id: attempt.id,
 		status: attempt.status as AttemptRecord["status"],
 		predecessorAttemptId: attempt.predecessorAttemptId ?? undefined,
@@ -577,7 +573,7 @@ export function FeatureDetailPage() {
 		exitCode: attempt.exitCode ?? undefined,
 		resultSummary: resultSummary(attempt.structuredResult),
 	}));
-	const failure = feature.failures[0];
+	const failure = (feature.failures ?? [])[0];
 	const observedPrState = feature.pullRequest?.observedState?.toUpperCase();
 	const prState =
 		observedPrState === "OPEN" || observedPrState === "CLOSED" || observedPrState === "MERGED"
@@ -595,11 +591,11 @@ export function FeatureDetailPage() {
 					acceptance: requirement.acceptance ?? [],
 				}))
 			: (task?.requirements ?? []);
-	const diagnosticLog = feature.diagnosticLogs[0];
+	const diagnosticLog = (feature.diagnosticLogs ?? [])[0];
 	const resolvedProjectName = projectName || feature.projectId;
 	const activeAttempt =
 		feature.activeAttempt ??
-		feature.attempts.find(
+		(feature.attempts ?? []).find(
 			(attempt) => attempt.status === "RUNNING" || attempt.status === "QUEUED",
 		) ??
 		null;
@@ -611,14 +607,16 @@ export function FeatureDetailPage() {
 			? String(activeAttempt.worker.lastHeartbeatAt)
 			: undefined;
 	const workerState = activeAttempt?.status;
-	const elapsedMs = elapsedFrom(startTime, activeAttempt?.endedAt ?? null);
+	const elapsedMs = elapsedMsBetween(startTime, activeAttempt?.endedAt ?? null);
 
 	return (
 		<section aria-label={`Feature ${feature.title}`}>
-			<header>
-				<h1>{feature.title}</h1>
-				<span>{feature.state.replace(/_/g, " ")}</span>
-				<p>{feature.branchName}</p>
+			<header className="page-header">
+				<div>
+					<h1>{feature.title}</h1>
+					<p>{feature.branchName}</p>
+				</div>
+				<span data-status={feature.state.toLowerCase()}>{feature.state.replace(/_/g, " ")}</span>
 			</header>
 
 			<dl>
@@ -631,6 +629,15 @@ export function FeatureDetailPage() {
 			</dl>
 
 			{actionError && <div role="alert">{actionError}</div>}
+
+			{isLiveStale ? (
+				<ViewState
+					state="stale"
+					message="Live updates disconnected — reconciling from persisted state."
+				/>
+			) : null}
+
+			{!hasTask && !hasJobData ? <ViewState state="empty" message="No task attached" /> : null}
 
 			{hasJobData && (
 				<>
@@ -653,7 +660,7 @@ export function FeatureDetailPage() {
 							lastHeartbeat={lastHeartbeat}
 							lastUpdate={feature.progress.lastUpdatedAt ?? undefined}
 							activeRequirementId={feature.progress.activeRequirementId ?? undefined}
-							recentActivity={feature.recentActivity.map((activity) => ({
+							recentActivity={(feature.recentActivity ?? []).map((activity) => ({
 								id: activity.id,
 								type: activity.type,
 								message: activity.summary,
@@ -699,7 +706,7 @@ export function FeatureDetailPage() {
 						/>
 					)}
 
-					{PR_STATES.has(feature.state) && feature.pullRequest && (
+					{(PR_STATES.has(feature.state) || feature.pullRequest) && feature.pullRequest && (
 						<PullRequestStatus
 							prNumber={feature.pullRequest.number}
 							prUrl={feature.pullRequest.url}

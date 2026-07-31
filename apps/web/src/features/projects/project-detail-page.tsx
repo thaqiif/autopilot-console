@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { isUnauthorized } from "../../api/result";
+import { useSseRestRefresh } from "../../api/use-sse-rest-refresh";
 import { useAuth } from "../../auth/auth-provider";
 import { ConfirmDialog } from "../../components/feedback/confirm-dialog";
 import { ViewState } from "../../components/feedback/view-state";
@@ -26,32 +28,38 @@ interface ProjectDetail {
 	releases: ReleaseSummary[];
 }
 
+type PageState = "loading" | "ready" | "error" | "stale" | "unauthorized";
+
 export function ProjectDetailPage() {
 	const { id } = useParams<{ id: string }>();
 	const { client } = useAuth();
 	const [project, setProject] = useState<ProjectDetail | null>(null);
-	const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+	const [state, setState] = useState<PageState>("loading");
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
 	const [archiving, setArchiving] = useState(false);
 
-	useEffect(() => {
-		let active = true;
-		async function load() {
-			const result = await client.get<ProjectDetail>(`/api/projects/${id}`);
-			if (!active) return;
-			if (!result.ok) {
-				setState("error");
-				return;
-			}
-			setProject(result.data);
-			setState("ready");
+	const load = useCallback(async () => {
+		const result = await client.get<ProjectDetail>(`/api/projects/${id}`);
+		if (isUnauthorized(result)) {
+			setState("unauthorized");
+			return;
 		}
-		void load();
-		return () => {
-			active = false;
-		};
+		if (!result.ok) {
+			setState("error");
+			return;
+		}
+		setProject(result.data);
+		setState("ready");
 	}, [client, id]);
+
+	useEffect(() => {
+		void load();
+	}, [load]);
+
+	useSseRestRefresh(load, {
+		onStale: () => setState((current) => (current === "ready" ? "stale" : current)),
+	});
 
 	async function handleArchive() {
 		if (!project) return;
@@ -76,15 +84,16 @@ export function ProjectDetailPage() {
 	}
 
 	if (state === "loading") return <ViewState state="loading" />;
+	if (state === "unauthorized") return <ViewState state="unauthorized" />;
 	if (state === "error") return <ViewState state="error" message="Project not found" />;
 
 	if (!project) return null;
 
 	return (
 		<section aria-label={`Project ${project.name}`}>
-			<header>
+			<header className="page-header">
 				<h1>{project.name}</h1>
-				<span>{project.status}</span>
+				<span data-status={project.status.toLowerCase()}>{project.status}</span>
 			</header>
 
 			<dl>
@@ -151,17 +160,20 @@ export function ProjectDetailPage() {
 					<ul className="entity-card-list">
 						{project.releases.map((release) => (
 							<li key={release.id}>
-								<Link to={`/releases/${release.id}`}>
-									<article className="entity-card">
-										<h3>{release.name}</h3>
+								<article className="entity-card">
+									<header>
+										<Link to={`/releases/${release.id}`}>
+											<h3>{release.name}</h3>
+										</Link>
 										<span>{release.version}</span>
-										<span>{release.status}</span>
-									</article>
-								</Link>
+										<span data-status={release.status.toLowerCase()}>{release.status}</span>
+									</header>
+								</article>
 							</li>
 						))}
 					</ul>
 				)}
+				{state === "stale" ? <ViewState state="stale" message="Data may be outdated" /> : null}
 			</section>
 		</section>
 	);
