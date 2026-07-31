@@ -447,23 +447,21 @@ export function createTaskApprovalService(
 		// approveAndQueue
 		// ------------------------------------------------------------------
 		async approveAndQueue({ featureId, projectId, displayedChecksum, operationKey, actor }) {
-			const featureRow = await getFeatureRow(sql, featureId);
-			if (!featureRow) {
-				return { ok: false, reason: "FEATURE_NOT_FOUND", message: "Feature not found" };
-			}
-			if (projectId !== undefined && featureRow.projectId !== projectId) {
-				return { ok: false, reason: "NOT_FOUND", message: "Feature not found in project" };
-			}
-
-			// Idempotency check — before state validation so repeat calls succeed
+			// Fast path: same operation key already durable — return without racing the feature.
 			const existingIdemp = await sql`
 				SELECT result FROM idempotency_records
 				WHERE operation_key = ${operationKey}
 			`;
 			if (existingIdemp.length > 0) {
 				const cached = existingIdemp[0]?.result as Record<string, unknown> | null;
+				const currentFeature = await getFeatureRow(sql, featureId);
+				if (!currentFeature) {
+					return { ok: false, reason: "FEATURE_NOT_FOUND", message: "Feature not found" };
+				}
+				if (projectId !== undefined && currentFeature.projectId !== projectId) {
+					return { ok: false, reason: "NOT_FOUND", message: "Feature not found in project" };
+				}
 				if (cached) {
-					const currentFeature = (await getFeatureRow(sql, featureId)) ?? featureRow;
 					return {
 						ok: true,
 						feature: mapFeature(currentFeature),
@@ -474,6 +472,16 @@ export function createTaskApprovalService(
 				}
 			}
 
+			const featureRow = await getFeatureRow(sql, featureId);
+			if (!featureRow) {
+				return { ok: false, reason: "FEATURE_NOT_FOUND", message: "Feature not found" };
+			}
+			if (projectId !== undefined && featureRow.projectId !== projectId) {
+				return { ok: false, reason: "NOT_FOUND", message: "Feature not found in project" };
+			}
+
+			// Reject illegal states before path/checksum validation so callers get a
+			// stable ILLEGAL_STATE reason even when no task is attached yet.
 			if (featureRow.state !== "TASKS_REVIEW") {
 				return {
 					ok: false,
@@ -495,7 +503,7 @@ export function createTaskApprovalService(
 				return { ok: false, reason: "NOT_FOUND", message: "Project not found" };
 			}
 
-			// Compute current checksum from source file
+			// Compute current checksum from source file outside the transaction.
 			const parsed = await readAndParseTaskFile(project.canonicalPath, featureRow.taskPath);
 			if (!parsed.ok) return parsed;
 
@@ -507,11 +515,60 @@ export function createTaskApprovalService(
 				};
 			}
 
-			// Transactional create: approval + transition + attempt + events + idempotency
+			// Transactional create under a feature row lock so concurrent different
+			// operation keys cannot each create an attempt for the same feature.
 			try {
-				const result = await withTransaction(sql, async (tx) => {
+				const outcome = await withTransaction(sql, async (tx) => {
+					// Serialize every concurrent approve against this feature.
+					await tx`SELECT id FROM features WHERE id = ${featureId} FOR UPDATE`;
+
+					// Same-key replay after lock (winner may have finished between checks).
+					const lockedIdemp = await tx`
+						SELECT result FROM idempotency_records
+						WHERE operation_key = ${operationKey}
+					`;
+					if (lockedIdemp.length > 0) {
+						const cached = lockedIdemp[0]?.result as Record<string, unknown> | null;
+						const current = await getFeatureRow(tx, featureId);
+						if (cached && current) {
+							return {
+								kind: "idempotent" as const,
+								feature: current,
+								approval: cached.approval as ApprovalResult,
+								attempt: cached.attempt as AttemptResult,
+							};
+						}
+					}
+
 					const currentRow = await getFeatureRow(tx, featureId);
-					if (!currentRow) throw new Error("Feature disappeared during transaction");
+					if (!currentRow) {
+						return {
+							kind: "error" as const,
+							reason: "FEATURE_NOT_FOUND" as const,
+							message: "Feature not found",
+						};
+					}
+					if (projectId !== undefined && currentRow.projectId !== projectId) {
+						return {
+							kind: "error" as const,
+							reason: "NOT_FOUND" as const,
+							message: "Feature not found in project",
+						};
+					}
+					if (currentRow.state !== "TASKS_REVIEW") {
+						return {
+							kind: "error" as const,
+							reason: "ILLEGAL_STATE" as const,
+							message: `Cannot approve in state ${currentRow.state}`,
+						};
+					}
+					if (!currentRow.taskPath) {
+						return {
+							kind: "error" as const,
+							reason: "VALIDATION_FAILED" as const,
+							message: "No task attached to feature",
+						};
+					}
 
 					const transition = applyFeatureTransition({
 						featureId,
@@ -522,24 +579,46 @@ export function createTaskApprovalService(
 						operationId: operationKey,
 						expectedVersion: currentRow.rowVersion,
 						currentVersion: currentRow.rowVersion,
+						observedState: currentRow.state as Feature["state"],
 					});
 
 					if (transition.kind === "rejected") {
-						throw new Error(`State transition rejected: ${transition.message}`);
+						return {
+							kind: "error" as const,
+							reason: "ILLEGAL_STATE" as const,
+							message: transition.message,
+						};
+					}
+					if (transition.kind !== "applied") {
+						return {
+							kind: "error" as const,
+							reason: "ILLEGAL_STATE" as const,
+							message: "Approve transition was already applied",
+						};
 					}
 
-					await tx`
+					const updated = await tx`
 						UPDATE features
-						SET state = 'QUEUED',
-							row_version = row_version + 1,
+						SET state = ${transition.nextState},
+							row_version = ${transition.nextVersion},
 							updated_at = now()
 						WHERE id = ${featureId}
+							AND state = ${transition.priorState}
+							AND row_version = ${transition.priorVersion}
+						RETURNING id
 					`;
+					if (updated.length !== 1) {
+						return {
+							kind: "error" as const,
+							reason: "ILLEGAL_STATE" as const,
+							message: "Feature changed while approving; refresh and try again",
+						};
+					}
 
 					const approval = await insertTaskApproval(tx, {
-						projectId: featureRow.projectId,
+						projectId: currentRow.projectId,
 						featureId,
-						relativeTaskPath: featureRow.taskPath as string,
+						relativeTaskPath: currentRow.taskPath as string,
 						checksum: parsed.checksum,
 						schemaCompatibilityVersion: "1.0.0",
 						requirementsSnapshot: parsed.summary.requirements,
@@ -547,16 +626,16 @@ export function createTaskApprovalService(
 					});
 
 					const attempt = await createDevelopmentAttempt(tx, {
-						projectId: featureRow.projectId,
+						projectId: currentRow.projectId,
 						featureId,
 						taskApprovalId: approval.id,
-						branchName: featureRow.branchName,
+						branchName: currentRow.branchName,
 						operationKey,
 						status: "QUEUED",
 					});
 
 					await appendActivityEvent(tx, {
-						projectId: featureRow.projectId,
+						projectId: currentRow.projectId,
 						featureId,
 						attemptId: attempt.id,
 						type: "feature.queued",
@@ -570,7 +649,7 @@ export function createTaskApprovalService(
 						action: "feature.approve_and_queue",
 						targetType: "feature",
 						targetId: featureId,
-						projectId: featureRow.projectId,
+						projectId: currentRow.projectId,
 						featureId,
 						attemptId: attempt.id,
 						correlationId: actor.correlationId,
@@ -578,7 +657,7 @@ export function createTaskApprovalService(
 						nextValues: redactValue({
 							approvalId: approval.id,
 							checksum: parsed.checksum,
-							branchName: featureRow.branchName,
+							branchName: currentRow.branchName,
 						}),
 					});
 
@@ -604,22 +683,31 @@ export function createTaskApprovalService(
 
 					await createIdempotencyRecord(tx, {
 						operationKey,
-						projectId: featureRow.projectId,
+						projectId: currentRow.projectId,
 						featureId,
 						attemptId: attempt.id,
 						result: idempotencyResult,
 					});
 
-					return idempotencyResult;
+					const queuedFeature = await getFeatureRow(tx, featureId);
+					return {
+						kind: "created" as const,
+						feature: queuedFeature ?? currentRow,
+						approval: idempotencyResult.approval,
+						attempt: idempotencyResult.attempt,
+					};
 				});
 
-				const updatedFeature = await getFeatureRow(sql, featureId);
+				if (outcome.kind === "error") {
+					return { ok: false, reason: outcome.reason, message: outcome.message };
+				}
+
 				return {
 					ok: true,
-					feature: updatedFeature ? mapFeature(updatedFeature) : mapFeature(featureRow),
-					approval: result.approval,
-					attempt: result.attempt,
-					idempotent: false,
+					feature: mapFeature(outcome.feature),
+					approval: outcome.approval,
+					attempt: outcome.attempt,
+					idempotent: outcome.kind === "idempotent",
 				};
 			} catch (err) {
 				if (isUniqueViolation(err)) {
@@ -629,17 +717,26 @@ export function createTaskApprovalService(
 					`;
 					if (recheck.length > 0) {
 						const cached = recheck[0]?.result as Record<string, unknown> | null;
-						if (cached) {
-							const currentFeature = await getFeatureRow(sql, featureId);
+						const currentFeature = await getFeatureRow(sql, featureId);
+						if (cached && currentFeature) {
 							return {
 								ok: true,
-								feature: currentFeature ? mapFeature(currentFeature) : mapFeature(featureRow),
+								feature: mapFeature(currentFeature),
 								approval: cached.approval as ApprovalResult,
 								attempt: cached.attempt as AttemptResult,
 								idempotent: true,
 							};
 						}
 					}
+					// Different operation key lost a uniqueness race — surface as illegal state.
+					const currentFeature = await getFeatureRow(sql, featureId);
+					return {
+						ok: false,
+						reason: "ILLEGAL_STATE",
+						message: currentFeature
+							? `Cannot approve in state ${currentFeature.state}`
+							: "Feature changed while approving",
+					};
 				}
 				throw err;
 			}

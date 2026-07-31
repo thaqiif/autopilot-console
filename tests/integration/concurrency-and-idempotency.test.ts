@@ -480,9 +480,7 @@ describe("concurrency and idempotency (production queue + worker)", () => {
 					retryService2.retry(retryRequest),
 				]);
 				expect(outcomes.map((o) => o.kind).sort()).toEqual(["idempotent", "retried"]);
-				const attemptIds = outcomes.flatMap((o) =>
-					o.kind === "blocked" ? [] : [o.attempt.id],
-				);
+				const attemptIds = outcomes.flatMap((o) => (o.kind === "blocked" ? [] : [o.attempt.id]));
 				expect(new Set(attemptIds).size).toBe(1);
 
 				const retryCounts = await ctx.sql`
@@ -526,9 +524,7 @@ describe("concurrency and idempotency (production queue + worker)", () => {
 			expect(prs).toHaveLength(1);
 			expect(ctx.githubState.prs.size).toBe(1);
 			// Exactly one push effect for the feature branch.
-			const pushes = ctx.gitState.pushes.filter(
-				(p) => p.featureBranch === afterDev?.branchName,
-			);
+			const pushes = ctx.gitState.pushes.filter((p) => p.featureBranch === afterDev?.branchName);
 			expect(pushes).toHaveLength(1);
 		},
 		{ timeout: 30_000 },
