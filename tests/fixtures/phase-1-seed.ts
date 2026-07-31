@@ -9,6 +9,7 @@ import {
 	createConcurrentDevelopmentWorkerRuntime,
 	createDevelopmentWorker,
 	createGithubRuntime,
+	type DevelopmentWorker,
 	type DevelopmentWorkerOutcome,
 	type GithubRuntime,
 	type WorkerRuntime,
@@ -244,9 +245,26 @@ export async function bootstrapPhase1(options?: {
 		now: clock.now,
 	} as Parameters<typeof createDevelopmentWorker>[0]);
 
+	// Production concurrent supervisor with outcome capture for assertions.
+	const collectedOutcomes: DevelopmentWorkerOutcome[] = [];
+	const instrumentedWorker: DevelopmentWorker = {
+		runOnce: () => developmentWorker.runOnce(),
+		beginOnce: async () => {
+			const begun = await developmentWorker.beginOnce();
+			if (begun.kind === "idle") return begun;
+			return {
+				kind: "started",
+				attemptId: begun.attemptId,
+				finished: begun.finished.then((outcome) => {
+					collectedOutcomes.push(outcome);
+					return outcome;
+				}),
+			};
+		},
+	};
 	const developmentRuntime = createConcurrentDevelopmentWorkerRuntime({
 		capacity,
-		worker: developmentWorker,
+		worker: instrumentedWorker,
 		heartbeatIntervalMs: 10_000,
 		idlePollMs: 1,
 		// Instant sleep so drain loops are deterministic in tests.
@@ -270,19 +288,16 @@ export async function bootstrapPhase1(options?: {
 	});
 
 	/**
-	 * Drive the production supervisor long enough to claim free capacity, then
-	 * await in-flight ownership. Mirrors apps/worker main without long-lived loops.
+	 * Drive the production supervisor until the queue is idle and all in-flight
+	 * ownership has drained. Returns the actual worker slot outcomes.
 	 */
 	const drainDevelopmentWork = async (): Promise<DevelopmentWorkerOutcome[]> => {
 		await ensureWorkerRegistration();
-		const outcomes: DevelopmentWorkerOutcome[] = [];
+		collectedOutcomes.length = 0;
 		const controller = new AbortController();
 		const finished = developmentRuntime.run(controller.signal);
 
-		// Allow the supervisor to fill slots repeatedly until the queue is idle
-		// and no jobs remain active. Cap iterations so a stuck claim cannot hang.
 		for (let i = 0; i < 50; i += 1) {
-			await Promise.resolve();
 			const depth = await sql`
 				SELECT count(*)::int AS n FROM development_job_attempts
 				WHERE status = 'QUEUED'
@@ -291,34 +306,12 @@ export async function bootstrapPhase1(options?: {
 			if (queued === 0 && developmentRuntime.activeCount() === 0) {
 				break;
 			}
-			// Yield so concurrent beginOnce/finished promises can settle.
 			await new Promise((resolve) => setTimeout(resolve, 0));
 		}
 
 		controller.abort();
 		await finished;
-
-		// Collect terminal outcomes from completed attempts for assertions.
-		// The supervisor itself only tracks lifecycle; read attempt status after drain.
-		const completed = await sql`
-			SELECT id, status FROM development_job_attempts
-			WHERE status IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
-			ORDER BY updated_at ASC, id ASC
-		`;
-		for (const row of completed) {
-			const status = String(row.status);
-			const attemptId = String(row.id);
-			if (status === "SUCCEEDED") {
-				outcomes.push({ kind: "completed", attemptId });
-			} else if (status === "FAILED") {
-				outcomes.push({ kind: "failed", attemptId, reason: "development failed" });
-			} else if (status === "CANCELLED") {
-				outcomes.push({ kind: "cancelled", attemptId });
-			} else {
-				outcomes.push({ kind: "interrupted", attemptId, reason: "interrupted" });
-			}
-		}
-		return outcomes;
+		return [...collectedOutcomes];
 	};
 
 	return {
