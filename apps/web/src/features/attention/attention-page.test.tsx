@@ -77,7 +77,7 @@ function installFetchMock() {
 		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 
 		if (url.includes("/api/attention")) {
-			return new Response(JSON.stringify(MOCK_ATTENTION), {
+			return new Response(JSON.stringify({ ok: true, data: MOCK_ATTENTION }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});

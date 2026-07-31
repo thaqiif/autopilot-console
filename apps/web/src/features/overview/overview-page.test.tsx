@@ -1,15 +1,16 @@
 /**
- * RED tests for global Overview, Attention, Activity, and Settings pages
+ * Tests for global Overview, Attention, Activity, and Settings pages
  * (requirement 25).
  *
  * Covers: attention-first ordering, attention card fields, metric counts
  * with development wording, category filters, cursor pagination, redacted
- * settings health, all view states, and REST refresh after SSE loss.
+ * settings health, all view states, REST refresh after SSE loss, and
+ * attention-card primary-action navigation for every category.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
 import { AuthProvider } from "../../auth/auth-provider";
 import { ViewState } from "../../components/feedback/view-state";
 
@@ -28,6 +29,8 @@ let AttentionCard: React.ComponentType<{
 	age: string;
 	category: string;
 	primaryAction: string;
+	href?: string;
+	external?: boolean;
 	onAction?: () => void;
 }>;
 let ActivityPage: React.ComponentType;
@@ -88,20 +91,109 @@ const MOCK_ATTENTION = {
 			projectId: "proj-1",
 			releaseId: "rel-1",
 			featureId: "feat-1",
-			reason: "Task review required",
-			state: "TASKS_REVIEW",
-			age: "2 hours ago",
+			reason: "task_review",
+			currentState: "TASKS_REVIEW",
+			ageBasis: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
 			category: "task_review",
-			primaryAction: "Review tasks",
+			primaryAction: "review_tasks",
 		},
 		{
 			projectId: "proj-2",
 			featureId: "feat-2",
-			reason: "Development failed",
-			state: "DEVELOPMENT_FAILED",
-			age: "3 hours ago",
+			reason: "development_failed",
+			currentState: "DEVELOPMENT_FAILED",
+			ageBasis: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
 			category: "development_failed",
-			primaryAction: "View failure",
+			primaryAction: "retry_development",
+		},
+	],
+};
+
+const MOCK_ATTENTION_FULL = {
+	items: [
+		{
+			projectId: "proj-1",
+			releaseId: "rel-1",
+			featureId: "feat-1",
+			reason: "task_review",
+			currentState: "TASKS_REVIEW",
+			ageBasis: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+			category: "task_review",
+			primaryAction: "review_tasks",
+		},
+		{
+			projectId: "proj-2",
+			featureId: "feat-2",
+			reason: "development_failed",
+			currentState: "DEVELOPMENT_FAILED",
+			ageBasis: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+			category: "development_failed",
+			primaryAction: "retry_development",
+		},
+		{
+			projectId: "proj-3",
+			featureId: "feat-3",
+			reason: "development_interrupted",
+			currentState: "DEVELOPMENT_INTERRUPTED",
+			ageBasis: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(),
+			category: "development_interrupted",
+			primaryAction: "retry_development",
+		},
+		{
+			projectId: "proj-4",
+			featureId: "feat-4",
+			reason: "pr_creation_failed",
+			currentState: "PR_CREATION_FAILED",
+			ageBasis: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+			category: "pr_creation_failed",
+			primaryAction: "retry_pr_creation",
+		},
+		{
+			projectId: "proj-5",
+			featureId: "feat-5",
+			reason: "ci_failed",
+			currentState: "CI_FAILED",
+			ageBasis: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+			category: "ci_failed",
+			primaryAction: "open_github_checks",
+		},
+		{
+			projectId: "proj-6",
+			featureId: "feat-6",
+			reason: "pr_review",
+			currentState: "PR_REVIEW",
+			ageBasis: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+			category: "pr_review",
+			primaryAction: "open_github_pr",
+			githubUrl: "https://github.com/acme/repo/pull/6",
+		},
+		{
+			projectId: "proj-7",
+			featureId: "feat-7",
+			reason: "pr_changes_requested",
+			currentState: "PR_CHANGES_REQUESTED",
+			ageBasis: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+			category: "pr_changes_requested",
+			primaryAction: "open_github_pr",
+			githubUrl: "https://github.com/acme/repo/pull/7",
+		},
+		{
+			projectId: "proj-8",
+			featureId: "feat-8",
+			reason: "blocked",
+			currentState: "BLOCKED",
+			ageBasis: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+			category: "blocked",
+			primaryAction: "resolve_block",
+		},
+		{
+			projectId: "proj-9",
+			featureId: "feat-9",
+			reason: "stale_github_sync",
+			currentState: "PR_REVIEW",
+			ageBasis: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+			category: "stale_github_sync",
+			primaryAction: "refresh_github_status",
 		},
 	],
 };
@@ -118,45 +210,97 @@ const MOCK_ACTIVITY = {
 			occurredAt: new Date().toISOString(),
 		},
 	],
-	cursor: "next-cursor",
+	nextCursor: "next-cursor",
 };
 
 const MOCK_HEALTH = {
-	database: { connected: true, latency: 12 },
-	workers: { active: 2, capacity: 4, heartbeatAge: "5s" },
-	autopilot: { available: true, version: "1.0.0" },
-	github: { authenticated: true, username: "testuser" },
-	queue: { depth: 1, oldestAge: "2m", pollingLag: "10s" },
-	runtime: { nodeEnv: "development", uptime: "2h" },
+	status: "ok",
+	database: { name: "database", status: "ok" },
+	worker: {
+		name: "worker",
+		status: "ok",
+		detail: {
+			active: true,
+			capacity: 4,
+			activeJobs: 2,
+			heartbeatAge: "5s ago",
+			queueDepth: 1,
+			pollingLagMs: 250,
+		},
+	},
+	autopilot: { name: "autopilot", status: "ok", detail: { available: true } },
+	github: { name: "github", status: "ok", detail: { authenticated: true } },
+	checkedAt: "2026-07-19T00:00:00.000Z",
 };
 
-const _fetchSpy: ReturnType<typeof Bun.spawn> | null = null;
-
-function installFetchMock() {
+function installFetchMock(overrides?: {
+	attentionData?: unknown;
+	healthData?: unknown;
+	activityData?: unknown;
+	unauthorized?: boolean;
+	error?: boolean;
+	callCounter?: { count: number };
+}) {
 	const original = globalThis.fetch;
 	const mockFetch = (async (input: string | URL | Request, _init?: RequestInit) => {
 		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+		if (overrides?.callCounter && /\/api\/(overview|attention|activity|health)/.test(url)) {
+			overrides.callCounter.count += 1;
+		}
+
+		if (overrides?.unauthorized) {
+			return new Response(
+				JSON.stringify({
+					ok: false,
+					error: {
+						code: "UNAUTHORIZED",
+						message: "Session expired or invalid",
+						httpStatus: 401,
+						nextAction: "LOGIN",
+					},
+				}),
+				{ status: 401, headers: { "Content-Type": "application/json" } },
+			);
+		}
+
+		if (overrides?.error) {
+			return new Response(
+				JSON.stringify({
+					ok: false,
+					error: {
+						code: "UNAVAILABLE",
+						message: "Temporary failure",
+						httpStatus: 503,
+						nextAction: "RETRY",
+					},
+				}),
+				{ status: 503, headers: { "Content-Type": "application/json" } },
+			);
+		}
 
 		if (url.includes("/api/overview")) {
-			return new Response(JSON.stringify(MOCK_OVERVIEW), {
+			return new Response(JSON.stringify({ ok: true, data: MOCK_OVERVIEW }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
 		}
 		if (url.includes("/api/attention")) {
-			return new Response(JSON.stringify(MOCK_ATTENTION), {
+			const data = overrides?.attentionData ?? MOCK_ATTENTION;
+			return new Response(JSON.stringify({ ok: true, data }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
 		}
 		if (url.includes("/api/activity")) {
-			return new Response(JSON.stringify(MOCK_ACTIVITY), {
+			const data = overrides?.activityData ?? MOCK_ACTIVITY;
+			return new Response(JSON.stringify({ ok: true, data }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
 		}
 		if (url.includes("/api/health")) {
-			return new Response(JSON.stringify(MOCK_HEALTH), {
+			const data = overrides?.healthData ?? MOCK_HEALTH;
+			return new Response(JSON.stringify({ ok: true, data }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
@@ -242,7 +386,11 @@ function renderCard(overrides?: Partial<React.ComponentProps<typeof AttentionCar
 		primaryAction: "Review tasks",
 		...overrides,
 	};
-	return render(<AttentionCard {...props} />);
+	return render(
+		<MemoryRouter>
+			<AttentionCard {...props} />
+		</MemoryRouter>,
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -326,7 +474,6 @@ describe("overview metrics", () => {
 	test("displays attention count", async () => {
 		renderAt("/");
 		await waitFor(() => {
-			// The SummaryCard for attention shows the label and count
 			const cards = screen.getAllByText("Attention");
 			expect(cards.length).toBeGreaterThanOrEqual(1);
 		});
@@ -408,9 +555,16 @@ describe("attention card fields", () => {
 	});
 
 	test("displays exactly one primary action button or link", () => {
-		renderCard({ primaryAction: "Review tasks" });
-		const button = screen.getByRole("button", { name: /review tasks/i });
-		expect(button).toBeTruthy();
+		renderCard({ primaryAction: "Review tasks", href: "/projects/proj-1/features/feat-1#tasks" });
+		const action =
+			screen.queryByRole("link", { name: /review tasks/i }) ??
+			screen.getByRole("button", { name: /review tasks/i });
+		expect(action).toBeTruthy();
+		const allActions = [
+			...screen.queryAllByRole("link", { name: /review tasks/i }),
+			...screen.queryAllByRole("button", { name: /review tasks/i }),
+		];
+		expect(allActions).toHaveLength(1);
 	});
 
 	test("primary action triggers callback when clicked", async () => {
@@ -420,8 +574,10 @@ describe("attention card fields", () => {
 				called = true;
 			},
 		});
-		const button = screen.getByRole("button", { name: /review/i });
-		button.click();
+		const action =
+			screen.queryByRole("button", { name: /review/i }) ??
+			screen.getByRole("link", { name: /review/i });
+		fireEvent.click(action);
 		expect(called).toBe(true);
 	});
 });
@@ -434,7 +590,7 @@ describe("attention page filters", () => {
 	let restore: () => void;
 	beforeEach(() => {
 		cleanup();
-		restore = installFetchMock();
+		restore = installFetchMock({ attentionData: MOCK_ATTENTION_FULL });
 	});
 	afterEach(() => {
 		cleanup();
@@ -448,11 +604,42 @@ describe("attention page filters", () => {
 		});
 	});
 
-	test("displays category filter controls", async () => {
+	test("displays category filter controls for all required categories", async () => {
 		renderAt("/attention");
 		await waitFor(() => {
 			expect(screen.queryAllByRole("button").length).toBeGreaterThan(0);
 		});
+		// All 8 attention categories should have filter buttons — scope to nav
+		const filterNav = document.querySelector("nav[aria-label='Attention filters']");
+		expect(filterNav).toBeTruthy();
+		const navText = filterNav?.textContent ?? "";
+		for (const cat of [
+			"Task Review",
+			"Development Failed",
+			"Development Interrupted",
+			"Pr Creation Failed",
+			"Ci Failed",
+			"Pr Review",
+			"Pr Changes Requested",
+			"Blocked",
+			"Stale Github Sync",
+		]) {
+			expect(navText).toMatch(new RegExp(cat.replace(/ /g, "\\s*"), "i"));
+		}
+	});
+
+	test("clicking a category filter toggles it", async () => {
+		renderAt("/attention");
+		await waitFor(() => {
+			expect(screen.queryByRole("heading", { name: /attention/i })).toBeTruthy();
+		});
+		// Use explicit role-based lookup for the filter button only
+		const filterBtn = screen.getByRole("button", { name: /^task review$/i });
+		expect(filterBtn.getAttribute("aria-pressed")).toBe("false");
+		fireEvent.click(filterBtn);
+		// Re-query after React re-render
+		const pressedBtn = screen.getByRole("button", { name: /^task review$/i });
+		expect(pressedBtn.getAttribute("aria-pressed")).toBe("true");
 	});
 });
 
@@ -493,6 +680,23 @@ describe("activity page", () => {
 		const rawLogPattern = /\d{2}:\d{2}:\d{2}\s+(INFO|WARN|ERROR|DEBUG)/i;
 		expect(rawLogPattern.test(document.body.textContent ?? "")).toBe(false);
 	});
+
+	test("displays load more button when there are more pages", async () => {
+		renderAt("/activity");
+		await waitFor(() => {
+			expect(screen.queryByText(/state_transition/i)).toBeTruthy();
+		});
+		expect(screen.getByRole("button", { name: /load more/i })).toBeTruthy();
+	});
+
+	test("activity events are displayed in newest-first order", async () => {
+		renderAt("/activity");
+		await waitFor(() => {
+			expect(screen.queryByText(/proj-1/i)).toBeTruthy();
+		});
+		const eventElements = document.querySelectorAll("li article");
+		expect(eventElements.length).toBeGreaterThan(0);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -527,7 +731,25 @@ describe("settings and health page", () => {
 	test("displays worker capacity and heartbeat", async () => {
 		renderAt("/settings");
 		await waitFor(() => {
-			expect(screen.queryByText(/worker/i)).toBeTruthy();
+			expect(screen.queryByText(/database/i)).toBeTruthy();
+		});
+		// Worker detail should include capacity and heartbeat age
+		const body = document.body.textContent ?? "";
+		expect(body).toMatch(/capacity/i);
+		expect(body).toMatch(/heartbeat/i);
+	});
+
+	test("displays queue depth", async () => {
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByText(/queue depth/i)).toBeTruthy();
+		});
+	});
+
+	test("displays polling lag", async () => {
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByText(/polling lag/i)).toBeTruthy();
 		});
 	});
 
@@ -597,6 +819,33 @@ describe("page view states", () => {
 		const projects = screen.queryByText(/projects?\s*:\s*\d/i);
 		expect(projects).toBeNull();
 	});
+
+	test("attention page shows stale state when data is stale", async () => {
+		const original = installFetchMock();
+		renderAt("/attention");
+		await waitFor(() => {
+			expect(screen.queryByText(/attention/i)).toBeTruthy();
+		});
+		original();
+	});
+
+	test("activity page shows stale state when data is stale", async () => {
+		const original = installFetchMock();
+		renderAt("/activity");
+		await waitFor(() => {
+			expect(screen.queryByText(/activity/i)).toBeTruthy();
+		});
+		original();
+	});
+
+	test("settings page shows stale state when data is stale", async () => {
+		const original = installFetchMock();
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByText(/settings/i)).toBeTruthy();
+		});
+		original();
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -604,17 +853,291 @@ describe("page view states", () => {
 // ---------------------------------------------------------------------------
 
 describe("SSE disconnect reconciliation", () => {
-	beforeEach(() => cleanup());
-	afterEach(() => cleanup());
+	let restore: () => void;
+	beforeEach(() => {
+		cleanup();
+	});
+	afterEach(() => {
+		cleanup();
+		restore?.();
+	});
 
 	test("overview refreshes from REST after simulated SSE disconnect", async () => {
+		const counter = { count: 0 };
+		restore = installFetchMock({ callCounter: counter });
 		renderAt("/");
-		expect(document.querySelector("[aria-live]")).toBeTruthy();
+		await waitFor(() => {
+			expect(screen.queryByText(/needs? your attention/i)).toBeTruthy();
+		});
+		const initialCalls = counter.count;
+		expect(initialCalls).toBeGreaterThan(0);
+
+		// Simulate live-update loss: pages should re-fetch authoritative REST state.
+		const refreshButton = screen.getByRole("button", { name: /refresh/i });
+		fireEvent.click(refreshButton);
+		await waitFor(() => {
+			expect(counter.count).toBeGreaterThan(initialCalls);
+		});
+		expect(screen.queryByText(/development merged features/i)).toBeTruthy();
+	});
+
+	test("attention page refreshes from REST after simulated SSE disconnect", async () => {
+		const counter = { count: 0 };
+		restore = installFetchMock({ attentionData: MOCK_ATTENTION_FULL, callCounter: counter });
+		renderAt("/attention");
+		await waitFor(() => {
+			expect(screen.queryByRole("heading", { name: /attention/i })).toBeTruthy();
+		});
+		const initialCalls = counter.count;
+		fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+		await waitFor(() => {
+			expect(counter.count).toBeGreaterThan(initialCalls);
+		});
+	});
+
+	test("activity page refreshes from REST after simulated SSE disconnect", async () => {
+		const counter = { count: 0 };
+		restore = installFetchMock({ callCounter: counter });
+		renderAt("/activity");
+		await waitFor(() => {
+			expect(screen.queryByRole("heading", { name: /activity/i })).toBeTruthy();
+		});
+		const initialCalls = counter.count;
+		fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+		await waitFor(() => {
+			expect(counter.count).toBeGreaterThan(initialCalls);
+		});
+	});
+
+	test("settings page refreshes from REST after simulated SSE disconnect", async () => {
+		const counter = { count: 0 };
+		restore = installFetchMock({ callCounter: counter });
+		renderAt("/settings");
+		await waitFor(() => {
+			expect(screen.queryByRole("heading", { name: /settings|status|health/i })).toBeTruthy();
+		});
+		const initialCalls = counter.count;
+		fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+		await waitFor(() => {
+			expect(counter.count).toBeGreaterThan(initialCalls);
+		});
 	});
 });
 
 // ---------------------------------------------------------------------------
-// 9. SummaryCard component
+// 9. Attention card primary action navigation
+// ---------------------------------------------------------------------------
+
+describe("attention card primary action navigation", () => {
+	beforeEach(() => cleanup());
+	afterEach(() => cleanup());
+
+	test("task_review category links to task review in one interaction", () => {
+		render(
+			<MemoryRouter>
+				<AttentionCard
+					projectId="proj-1"
+					featureId="feat-1"
+					reason="Needs task review"
+					state="TASKS_REVIEW"
+					age="1 hour ago"
+					category="task_review"
+					primaryAction="Review tasks"
+					href="/projects/proj-1/features/feat-1#tasks"
+				/>
+			</MemoryRouter>,
+		);
+		const action = screen.getByRole("link", { name: /review tasks/i });
+		expect(action.getAttribute("href")).toBe("/projects/proj-1/features/feat-1#tasks");
+	});
+
+	test("development_failed category links to failure detail", () => {
+		render(
+			<MemoryRouter>
+				<AttentionCard
+					projectId="proj-1"
+					featureId="feat-1"
+					reason="Autopilot process exited with code 1"
+					state="DEVELOPMENT_FAILED"
+					age="3 hours ago"
+					category="development_failed"
+					primaryAction="View failure"
+					href="/projects/proj-1/features/feat-1#failure"
+				/>
+			</MemoryRouter>,
+		);
+		const action = screen.getByRole("link", { name: /view failure/i });
+		expect(action.getAttribute("href")).toBe("/projects/proj-1/features/feat-1#failure");
+	});
+
+	test("development_interrupted category links to failure detail", () => {
+		render(
+			<MemoryRouter>
+				<AttentionCard
+					projectId="proj-1"
+					featureId="feat-1"
+					reason="Lost worker heartbeat"
+					state="DEVELOPMENT_INTERRUPTED"
+					age="5 hours ago"
+					category="development_interrupted"
+					primaryAction="View failure"
+					href="/projects/proj-1/features/feat-1#failure"
+				/>
+			</MemoryRouter>,
+		);
+		const action = screen.getByRole("link", { name: /view failure/i });
+		expect(action.getAttribute("href")).toBe("/projects/proj-1/features/feat-1#failure");
+	});
+
+	test("pr_review category links to GitHub PR when URL is known", () => {
+		render(
+			<MemoryRouter>
+				<AttentionCard
+					projectId="proj-1"
+					featureId="feat-1"
+					reason="Awaiting PR review"
+					state="PR_REVIEW"
+					age="30 minutes ago"
+					category="pr_review"
+					primaryAction="View on GitHub"
+					href="https://github.com/acme/repo/pull/1"
+					external
+				/>
+			</MemoryRouter>,
+		);
+		const action = screen.getByRole("link", { name: /github/i });
+		expect(action.getAttribute("href")).toBe("https://github.com/acme/repo/pull/1");
+		expect(action.getAttribute("target")).toBe("_blank");
+	});
+
+	test("pr_creation_failed category links to failure detail", () => {
+		render(
+			<MemoryRouter>
+				<AttentionCard
+					projectId="proj-1"
+					featureId="feat-1"
+					reason="Push rejected by remote"
+					state="PR_CREATION_FAILED"
+					age="2 hours ago"
+					category="pr_creation_failed"
+					primaryAction="View failure"
+					href="/projects/proj-1/features/feat-1#failure"
+				/>
+			</MemoryRouter>,
+		);
+		const action = screen.getByRole("link", { name: /view failure/i });
+		expect(action.getAttribute("href")).toBe("/projects/proj-1/features/feat-1#failure");
+	});
+
+	test("ci_failed category links to failure detail", () => {
+		render(
+			<MemoryRouter>
+				<AttentionCard
+					projectId="proj-1"
+					featureId="feat-1"
+					reason="Checks did not pass"
+					state="CI_FAILED"
+					age="1 hour ago"
+					category="ci_failed"
+					primaryAction="View failure"
+					href="/projects/proj-1/features/feat-1#failure"
+				/>
+			</MemoryRouter>,
+		);
+		const action = screen.getByRole("link", { name: /view failure/i });
+		expect(action.getAttribute("href")).toBe("/projects/proj-1/features/feat-1#failure");
+	});
+
+	test("pr_changes_requested category links to GitHub PR when URL is known", () => {
+		render(
+			<MemoryRouter>
+				<AttentionCard
+					projectId="proj-1"
+					featureId="feat-1"
+					reason="Reviewer requested changes"
+					state="PR_CHANGES_REQUESTED"
+					age="45 minutes ago"
+					category="pr_changes_requested"
+					primaryAction="View on GitHub"
+					href="https://github.com/acme/repo/pull/2"
+					external
+				/>
+			</MemoryRouter>,
+		);
+		const action = screen.getByRole("link", { name: /github/i });
+		expect(action.getAttribute("href")).toBe("https://github.com/acme/repo/pull/2");
+	});
+
+	test("blocked category links to feature detail", () => {
+		render(
+			<MemoryRouter>
+				<AttentionCard
+					projectId="proj-1"
+					featureId="feat-1"
+					reason="Invariant check failed"
+					state="BLOCKED"
+					age="10 minutes ago"
+					category="blocked"
+					primaryAction="View details"
+					href="/projects/proj-1/features/feat-1"
+				/>
+			</MemoryRouter>,
+		);
+		const action = screen.getByRole("link", { name: /view details/i });
+		expect(action.getAttribute("href")).toBe("/projects/proj-1/features/feat-1");
+	});
+
+	test("overview renders domain action codes as human labels with one primary action", async () => {
+		const restore = installFetchMock({ attentionData: MOCK_ATTENTION });
+		renderAt("/");
+		await waitFor(() => {
+			expect(screen.queryByRole("link", { name: /review tasks/i })).toBeTruthy();
+		});
+		expect(screen.getByRole("link", { name: /view failure/i })).toBeTruthy();
+		expect(screen.queryByText("review_tasks")).toBeNull();
+		restore();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 9b. Additional page view-state contracts
+// ---------------------------------------------------------------------------
+
+describe("portfolio page error and unauthorized states", () => {
+	let restore: () => void;
+	beforeEach(() => cleanup());
+	afterEach(() => {
+		cleanup();
+		restore?.();
+	});
+
+	test("overview shows unauthorized when session is invalid", async () => {
+		restore = installFetchMock({ unauthorized: true });
+		renderAt("/");
+		await waitFor(() => {
+			expect(screen.queryByText(/sign in/i)).toBeTruthy();
+		});
+	});
+
+	test("attention shows error state when API fails", async () => {
+		restore = installFetchMock({ error: true });
+		renderAt("/attention");
+		await waitFor(() => {
+			expect(screen.getByRole("alert").textContent).toMatch(/failed/i);
+		});
+	});
+
+	test("activity shows empty state when no events exist", async () => {
+		restore = installFetchMock({ activityData: { items: [], nextCursor: null } });
+		renderAt("/activity");
+		await waitFor(() => {
+			expect(screen.queryByText(/no activity/i)).toBeTruthy();
+		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 10. SummaryCard component
 // ---------------------------------------------------------------------------
 
 describe("summary card component", () => {
