@@ -12,6 +12,8 @@ export interface JobActionsProps {
 	isPrRetrying?: boolean;
 	cancelRefused?: string | null;
 	retryRefused?: string | null;
+	projectName?: string;
+	featureTitle?: string;
 }
 
 const Cancellable_STATES = new Set(["QUEUED", "DEVELOPING", "RUNNING"]);
@@ -33,6 +35,8 @@ export function JobActions({
 	isPrRetrying,
 	cancelRefused,
 	retryRefused,
+	projectName,
+	featureTitle,
 }: JobActionsProps) {
 	const [showCancelDialog, setShowCancelDialog] = useState(false);
 	const [showRetryDialog, setShowRetryDialog] = useState(false);
@@ -97,8 +101,9 @@ export function JobActions({
 				<div role="dialog" aria-modal="true" aria-label="Confirm cancellation">
 					<h3>Cancel Development</h3>
 					<p>
-						This will cancel the current development for this feature. The process will be signaled
-						to stop gracefully.
+						{projectName && featureTitle
+							? `Cancel development for ${featureTitle} in project ${projectName}? The process will be signaled to stop gracefully.`
+							: "This will cancel the current development for this feature. The process will be signaled to stop gracefully."}
 					</p>
 					<div>
 						<button type="button" onClick={() => setShowCancelDialog(false)}>
@@ -115,8 +120,10 @@ export function JobActions({
 				<div role="dialog" aria-modal="true" aria-label="Confirm retry">
 					<h3>Retry Development</h3>
 					<p>
-						This will create a new development attempt using the same feature branch and current
-						task progress. Prior attempts and logs will be preserved.
+						This will create a new development attempt for{" "}
+						{projectName && featureTitle ? `${featureTitle} in ${projectName}` : "this feature"}{" "}
+						using the same feature branch and current task progress. Prior attempts and logs will be
+						preserved.
 					</p>
 					<div>
 						<button type="button" onClick={() => setShowRetryDialog(false)}>
@@ -133,8 +140,9 @@ export function JobActions({
 				<div role="dialog" aria-modal="true" aria-label="Confirm PR retry">
 					<h3>Retry PR Creation</h3>
 					<p>
-						This will retry creating the pull request for this feature. The existing branch push
-						will be reused if possible.
+						This will retry creating the pull request for{" "}
+						{projectName && featureTitle ? `${featureTitle} in ${projectName}` : "this feature"}.
+						The existing branch push will be reused if possible.
 					</p>
 					<div>
 						<button type="button" onClick={() => setShowPrRetryDialog(false)}>

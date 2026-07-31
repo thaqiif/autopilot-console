@@ -7,14 +7,6 @@ export interface FailureDetailProps {
 	nextAction?: string;
 }
 
-function redactCredentials(text: string): string {
-	return text
-		.replace(/(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]+/g, "[REDACTED]")
-		.replace(/x-access-token:[^@]+@/g, "x-access-token:[REDACTED]@")
-		.replace(/(?:password|token|secret|key)=([^&\s]+)/gi, "$1=[REDACTED]")
-		.replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [REDACTED]");
-}
-
 function formatTimestamp(iso: string): string {
 	try {
 		return new Date(iso).toLocaleString("en-US", {
@@ -38,7 +30,7 @@ export function FailureDetail({
 	timestamp,
 	nextAction,
 }: FailureDetailProps) {
-	const safeMessage = redactCredentials(message);
+	const safeMessage = redactSecrets(message);
 
 	return (
 		<div role="alert" aria-label="Failure detail">
@@ -67,3 +59,5 @@ export function FailureDetail({
 		</div>
 	);
 }
+
+import { redactSecrets } from "@autopilot-console/shared/security/redaction";

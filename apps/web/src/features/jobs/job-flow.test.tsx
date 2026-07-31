@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createApiClient } from "../../api/client";
 import { AuthProvider } from "../../auth/auth-provider";
 
 // ---------------------------------------------------------------------------
@@ -97,6 +98,8 @@ interface JobActionsProps {
 	isPrRetrying?: boolean;
 	cancelRefused?: string | null;
 	retryRefused?: string | null;
+	projectName?: string;
+	featureTitle?: string;
 }
 
 interface FailureDetailProps {
@@ -303,14 +306,49 @@ function installFetchMock(opts?: {
 	attempts?: AttemptRecord[];
 	failure?: FailureDetailProps | null;
 	prStatus?: Partial<PullRequestStatusProps>;
+	callCounter?: { count: number };
+	includeDiagnosticLog?: boolean;
+	stalePr?: boolean;
 }) {
 	const original = globalThis.fetch;
 	const featureState = opts?.featureState ?? "DEVELOPING";
 	const attempts = opts?.attempts ?? MOCK_ATTEMPTS;
+	const callCounter = opts?.callCounter;
+	const prStates = new Set([
+		"PR_CREATING",
+		"PR_CREATION_FAILED",
+		"CI_RUNNING",
+		"CI_FAILED",
+		"PR_REVIEW",
+		"PR_CHANGES_REQUESTED",
+		"DEVELOPMENT_MERGED",
+	]);
+	const pr = prStates.has(featureState)
+		? {
+				prNumber: 42,
+				prUrl: "https://github.com/thaqiif/autopilot-console/pull/42",
+				prState: featureState === "DEVELOPMENT_MERGED" ? ("MERGED" as const) : ("OPEN" as const),
+				headSha: "abc123",
+				lastSyncAt: opts?.stalePr ? "2020-01-01T00:00:00Z" : "2026-07-17T10:12:00Z",
+				...(opts?.prStatus ?? {}),
+			}
+		: undefined;
+	const activeAttempt = attempts.find((attempt) => attempt.status === "RUNNING") ?? attempts[0];
 
 	const mockFetch = (async (input: string | URL | Request, init?: RequestInit) => {
 		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 		const method = init?.method ?? "GET";
+		if (callCounter) callCounter.count += 1;
+
+		if (url.match(/\/api\/projects\/proj-1$/) && method === "GET") {
+			return new Response(
+				JSON.stringify({
+					ok: true,
+					data: { id: "proj-1", name: "Autopilot Console" },
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
+		}
 
 		if (url.match(/\/api\/features\/feat-1$/) && method === "GET") {
 			return new Response(
@@ -318,14 +356,129 @@ function installFetchMock(opts?: {
 					ok: true,
 					data: {
 						id: "feat-1",
+						projectId: "proj-1",
+						releaseId: "rel-1",
 						title: "User Authentication",
 						slug: "user-auth",
+						summary: "Implement user authentication",
 						state: featureState,
-						branch: "feature/feat-1-user-auth",
-						projectId: "proj-1",
-						projectName: "Console",
-						releaseId: "rel-1",
-						releaseName: "v1.0",
+						branchName: "feature/feat-1-user-auth",
+						taskPath: null,
+						rowVersion: 1,
+						taskApproval: null,
+						progress: {
+							totalRequirements: 5,
+							passedRequirements: 1,
+							activeRequirements: 1,
+							stuckRequirements: 1,
+							invalidRequirements: 1,
+							remainingRequirements: 1,
+							activeRequirementId: "2",
+							lastUpdatedAt: "2026-07-17T10:12:00Z",
+							requirements: MOCK_REQUIREMENTS.map((requirement) => ({
+								id: requirement.id,
+								description: requirement.description,
+								status: requirement.status,
+								passes: requirement.passes,
+								stuck: requirement.stuck,
+								invalidTest: requirement.invalidTest,
+								dependsOn: requirement.id === "3" ? ["1"] : [],
+								acceptance: ["must work"],
+								phases: {
+									red: requirement.redPhase,
+									green: requirement.greenPhase,
+									refactor: requirement.refactorPhase,
+								},
+							})),
+						},
+						activeAttempt: activeAttempt
+							? {
+									id: activeAttempt.id,
+									status: activeAttempt.status,
+									workerRegistrationId: activeAttempt.workerId ?? null,
+									worker: activeAttempt.workerId
+										? {
+												workerId: activeAttempt.workerId,
+												hostname: "worker-host",
+												capacity: 2,
+												activeJobs: 1,
+												lastHeartbeatAt: "2026-07-17T10:12:00Z",
+											}
+										: null,
+									heartbeatAt: "2026-07-17T10:12:00Z",
+									enqueuedAt: activeAttempt.queuedAt,
+									startedAt: activeAttempt.startedAt ?? null,
+									endedAt: activeAttempt.endedAt ?? null,
+									exitCode: activeAttempt.exitCode ?? null,
+									structuredResult: activeAttempt.resultSummary
+										? { summary: activeAttempt.resultSummary }
+										: null,
+									predecessorAttemptId: activeAttempt.predecessorAttemptId ?? null,
+								}
+							: null,
+						attempts: attempts.map((attempt) => ({
+							id: attempt.id,
+							status: attempt.status,
+							workerRegistrationId: attempt.workerId ?? null,
+							worker: attempt.workerId
+								? {
+										workerId: attempt.workerId,
+										hostname: "worker-host",
+										capacity: 2,
+										activeJobs: 1,
+										lastHeartbeatAt: "2026-07-17T10:12:00Z",
+									}
+								: null,
+							heartbeatAt: attempt.status === "RUNNING" ? "2026-07-17T10:12:00Z" : null,
+							enqueuedAt: attempt.queuedAt,
+							startedAt: attempt.startedAt ?? null,
+							endedAt: attempt.endedAt ?? null,
+							exitCode: attempt.exitCode ?? null,
+							structuredResult: attempt.resultSummary ? { summary: attempt.resultSummary } : null,
+							predecessorAttemptId: attempt.predecessorAttemptId ?? null,
+						})),
+						failures:
+							opts?.failure == null
+								? []
+								: [
+										{
+											id: "failure-1",
+											attemptId: opts.failure.attemptId ?? null,
+											category: opts.failure.code,
+											summary: opts.failure.message,
+											recommendedAction: opts.failure.nextAction ?? "Retry development",
+											occurredAt: opts.failure.timestamp,
+										},
+									],
+						diagnosticLogs:
+							opts?.includeDiagnosticLog === false
+								? []
+								: [
+										{
+											id: "log-1",
+											attemptId: "attempt-1",
+											sequence: 1,
+											stream: "stderr",
+											body: MOCK_DIAGNOSTIC_LOG,
+											truncated: true,
+										},
+									],
+						pullRequest: pr
+							? {
+									number: pr.prNumber,
+									url: pr.prUrl,
+									observedState: pr.prState,
+									observedHeadSha: pr.headSha,
+									mergeCommitSha: pr.mergeCommitSha ?? null,
+									lastObservedAt: pr.lastSyncAt,
+								}
+							: null,
+						recentActivity: MOCK_ACTIVITY.map((activity) => ({
+							id: activity.id,
+							type: activity.type,
+							summary: activity.message,
+							occurredAt: activity.timestamp,
+						})),
 					},
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
@@ -429,6 +582,7 @@ function installFetchMock(opts?: {
 // ---------------------------------------------------------------------------
 
 function renderAt(path: string, _opts?: { featureState?: string }) {
+	const client = createApiClient({ baseUrl: "", getCsrfToken: () => "test-csrf" });
 	const router = createMemoryRouter(
 		[
 			{
@@ -442,7 +596,7 @@ function renderAt(path: string, _opts?: { featureState?: string }) {
 			{
 				path: "/features/:id",
 				element: (
-					<AuthProvider initialAuthenticated={true}>
+					<AuthProvider client={client} initialAuthenticated={true}>
 						<FeatureDetailPage />
 					</AuthProvider>
 				),
@@ -1143,7 +1297,7 @@ describe("feature detail page with job views", () => {
 		installFetchMock({ featureState: "DEVELOPING" });
 		renderAt("/features/feat-1");
 		await waitFor(() => {
-			expect(screen.queryByText(/developing/i)).toBeTruthy();
+			expect(screen.queryAllByText(/developing/i).length).toBeGreaterThan(0);
 		});
 	});
 
@@ -1298,6 +1452,183 @@ describe("job flow accessibility", () => {
 		const links = screen.getAllByRole("link");
 		for (const link of links) {
 			expect(link.getAttribute("href")).toBeTruthy();
+		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 9b. Acceptance gaps for durable job owner workflows
+// ---------------------------------------------------------------------------
+
+describe("job progress active requirement count", () => {
+	beforeEach(() => cleanup());
+	afterEach(() => cleanup());
+
+	test("renders active requirement count", () => {
+		const { container } = renderJobProgress({ activeRequirements: 2 });
+		expect(container.textContent).toContain("Active");
+		expect(container.textContent).toMatch(/Active\s*2|2\s*Active/i);
+	});
+});
+
+describe("job action confirmations name project and feature", () => {
+	beforeEach(() => cleanup());
+	afterEach(() => cleanup());
+
+	test("cancel confirmation names project and feature", async () => {
+		renderJobActions({
+			featureState: "DEVELOPING",
+			projectName: "Autopilot Console",
+			featureTitle: "User Authentication",
+		});
+		fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+		await waitFor(() => {
+			const dialog = screen.getByRole("dialog");
+			expect(dialog.textContent).toMatch(/User Authentication/);
+			expect(dialog.textContent).toMatch(/Autopilot Console/);
+		});
+	});
+
+	test("retry confirmation names project and feature", async () => {
+		renderJobActions({
+			featureState: "DEVELOPMENT_FAILED",
+			projectName: "Autopilot Console",
+			featureTitle: "User Authentication",
+		});
+		fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
+		await waitFor(() => {
+			const dialog = screen.getByRole("dialog");
+			expect(dialog.textContent).toMatch(/User Authentication/);
+			expect(dialog.textContent).toMatch(/Autopilot Console/);
+		});
+	});
+});
+
+describe("feature detail wires durable job and PR owner workflows", () => {
+	let restore: () => void;
+	beforeEach(() => {
+		cleanup();
+	});
+	afterEach(() => {
+		cleanup();
+		restore?.();
+	});
+
+	test("renders requirement progress cards from persisted progress snapshot", async () => {
+		restore = installFetchMock({ featureState: "DEVELOPING" });
+		renderAt("/features/feat-1");
+		await waitFor(() => {
+			expect(screen.getAllByText(/implement login endpoint/i).length).toBeGreaterThan(0);
+		});
+		expect(screen.getAllByText(/create user model/i).length).toBeGreaterThan(0);
+		expect(screen.getAllByText(/red:/i).length).toBeGreaterThan(0);
+	});
+
+	test("renders queue start elapsed heartbeat and worker timing from active attempt", async () => {
+		restore = installFetchMock({ featureState: "DEVELOPING" });
+		renderAt("/features/feat-1");
+		await waitFor(() => {
+			const progress = document.querySelector('[aria-label="Development progress"]');
+			expect(progress?.textContent).toMatch(/Queued/i);
+			expect(progress?.textContent).toMatch(/Started/i);
+			expect(progress?.textContent).toMatch(/Elapsed/i);
+			expect(progress?.textContent).toMatch(/Last Heartbeat/i);
+			expect(progress?.textContent).toMatch(/Worker/i);
+		});
+	});
+
+	test("renders active requirement count on feature detail progress", async () => {
+		restore = installFetchMock({ featureState: "DEVELOPING" });
+		renderAt("/features/feat-1");
+		await waitFor(() => {
+			const progress = document.querySelector('[aria-label="Development progress"]');
+			expect(progress?.textContent).toMatch(/Active/i);
+		});
+	});
+
+	test("renders bounded diagnostic log excerpt from feature detail", async () => {
+		restore = installFetchMock({ featureState: "DEVELOPING", includeDiagnosticLog: true });
+		renderAt("/features/feat-1");
+		await waitFor(() => {
+			expect(screen.queryByText(/starting autopilot/i)).toBeTruthy();
+		});
+		expect(document.querySelector('[aria-label="Diagnostic log"]')).toBeTruthy();
+	});
+
+	test("renders predecessor attempt linkage from API attempts", async () => {
+		restore = installFetchMock({ featureState: "DEVELOPING" });
+		renderAt("/features/feat-1");
+		await waitFor(() => {
+			const history = document.querySelector('[aria-label="Attempt history"]');
+			expect(history?.textContent).toMatch(/Predecessor/i);
+			expect(history?.textContent).toContain("attempt-1");
+		});
+	});
+
+	test("cancel confirmation on feature detail names project and feature", async () => {
+		restore = installFetchMock({ featureState: "DEVELOPING" });
+		renderAt("/features/feat-1");
+		await waitFor(() => {
+			expect(screen.queryByRole("button", { name: /^cancel$/i })).toBeTruthy();
+		});
+		fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+		await waitFor(() => {
+			const dialog = screen.getByRole("dialog");
+			expect(dialog.textContent).toMatch(/User Authentication/);
+			expect(dialog.textContent).toMatch(/Autopilot Console/);
+		});
+	});
+
+	test("stale live updates show last update and refresh reconciles through REST", async () => {
+		const counter = { count: 0 };
+		restore = installFetchMock({ featureState: "DEVELOPING", callCounter: counter });
+		renderAt("/features/feat-1");
+		await waitFor(() => {
+			expect(screen.queryByText(/user authentication/i)).toBeTruthy();
+		});
+		const initialCalls = counter.count;
+		expect(initialCalls).toBeGreaterThan(0);
+
+		const refresh = await waitFor(() => {
+			const button = screen.getByRole("button", { name: /refresh/i });
+			expect(button).toBeTruthy();
+			return button;
+		});
+		fireEvent.click(refresh);
+		await waitFor(() => {
+			expect(counter.count).toBeGreaterThan(initialCalls);
+		});
+		expect(document.querySelector('[aria-label="Development progress"]')?.textContent).toMatch(
+			/Total/i,
+		);
+	});
+
+	test("renders stale PR sync indicator when observation is outdated", async () => {
+		restore = installFetchMock({ featureState: "PR_REVIEW", stalePr: true });
+		renderAt("/features/feat-1");
+		await waitFor(() => {
+			expect(screen.queryByText(/outdated/i)).toBeTruthy();
+		});
+	});
+
+	test("feature detail never renders merge or approve PR controls across PR states", async () => {
+		for (const featureState of [
+			"PR_CREATING",
+			"CI_RUNNING",
+			"CI_FAILED",
+			"PR_REVIEW",
+			"PR_CHANGES_REQUESTED",
+			"DEVELOPMENT_MERGED",
+		]) {
+			cleanup();
+			restore?.();
+			restore = installFetchMock({ featureState });
+			renderAt("/features/feat-1");
+			await waitFor(() => {
+				expect(screen.queryByText(/user authentication/i)).toBeTruthy();
+			});
+			expect(screen.queryByRole("button", { name: /merge/i })).toBeNull();
+			expect(screen.queryByRole("button", { name: /approve.*pr|merge.*pr/i })).toBeNull();
 		}
 	});
 });

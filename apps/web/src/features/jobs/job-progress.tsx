@@ -1,3 +1,6 @@
+import type { RequirementSummary } from "../tasks/requirement-card";
+import { RequirementCard } from "../tasks/requirement-card";
+
 export interface RequirementProgress {
 	id: string;
 	description: string;
@@ -8,6 +11,11 @@ export interface RequirementProgress {
 	redPhase: boolean;
 	greenPhase: boolean;
 	refactorPhase: boolean;
+	dependsOn?: string[];
+	acceptance?: string[];
+	stuckReason?: string;
+	invalidTestReason?: string;
+	blockedReason?: string;
 }
 
 export interface ActivityEvent {
@@ -64,20 +72,30 @@ function formatTime(iso?: string): string {
 	}
 }
 
-function TDDPhases({ req }: { req: RequirementProgress }) {
-	return (
-		<span>
-			Red: {req.redPhase ? "Complete" : "Pending"} | Green:{" "}
-			{req.greenPhase ? "Complete" : "Pending"} | Refactor:{" "}
-			{req.refactorPhase ? "Complete" : "Pending"}
-		</span>
-	);
+function toRequirementSummary(req: RequirementProgress): RequirementSummary {
+	return {
+		id: req.id,
+		description: req.description,
+		status: req.status,
+		passes: req.passes,
+		stuck: req.stuck,
+		stuckReason: req.stuckReason,
+		invalidTest: req.invalidTest,
+		invalidTestReason: req.invalidTestReason,
+		blockedReason: req.blockedReason,
+		dependsOn: req.dependsOn ?? [],
+		acceptance: req.acceptance ?? [],
+		redPhase: req.redPhase,
+		greenPhase: req.greenPhase,
+		refactorPhase: req.refactorPhase,
+	};
 }
 
 export function JobProgress({
 	featureState,
 	totalRequirements,
 	passedRequirements,
+	activeRequirements,
 	stuckRequirements,
 	invalidRequirements,
 	remainingRequirements,
@@ -101,9 +119,10 @@ export function JobProgress({
 		<section aria-label="Development progress">
 			<h3>Progress</h3>
 
-			{isStale && (
-				<div role="status">
-					<p>Last update: {formatTime(lastUpdate)}</p>
+			{(isStale || lastUpdate || onRefresh) && (
+				<div role={isStale ? "status" : undefined}>
+					{lastUpdate && <p>Last update: {formatTime(lastUpdate)}</p>}
+					{isStale && <p>Live updates disconnected — reconciling from persisted state.</p>}
 					{onRefresh && (
 						<button type="button" onClick={onRefresh}>
 							Refresh
@@ -117,6 +136,8 @@ export function JobProgress({
 				<dd>{totalRequirements}</dd>
 				<dt>Passed</dt>
 				<dd>{passedRequirements}</dd>
+				<dt>Active</dt>
+				<dd>{activeRequirements}</dd>
 				<dt>Stuck</dt>
 				<dd>{stuckRequirements}</dd>
 				<dt>Invalid</dt>
@@ -170,24 +191,7 @@ export function JobProgress({
 			<section aria-label="Requirements">
 				<h4>Requirements</h4>
 				{requirements.map((req) => (
-					<article key={req.id} aria-label={`Requirement ${req.id}`}>
-						<header>
-							<span>{req.id}</span>
-							<span>{req.description}</span>
-							<span>
-								{req.passes
-									? "Passed"
-									: req.stuck
-										? "Stuck"
-										: req.invalidTest
-											? "Invalid"
-											: req.status === "in_progress"
-												? "In Progress"
-												: "Not Started"}
-							</span>
-						</header>
-						<TDDPhases req={req} />
-					</article>
+					<RequirementCard key={req.id} requirement={toRequirementSummary(req)} />
 				))}
 			</section>
 
