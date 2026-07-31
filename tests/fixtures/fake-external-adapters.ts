@@ -263,6 +263,38 @@ export function mergePrExternally(
 	});
 }
 
+/** Patch mutable PR observation fields for current-head CI/review polling. */
+export function setPullRequestStatus(
+	state: FakeGitHubState,
+	prNumber: number,
+	patch: Partial<PullRequestStatus> & { state?: PullRequestStatus["state"] },
+): void {
+	const existing = state.statuses.get(prNumber);
+	const base: PullRequestStatus = existing ?? {
+		repository: { owner: "acme", repository: "repo", fullName: "acme/repo" },
+		number: prNumber,
+		url: `https://github.com/acme/repo/pull/${prNumber}`,
+		state: "open",
+		currentHeadSha: "head-sha",
+		headBranch: "feature/branch",
+		baseBranch: "main",
+		checks: [],
+		checkSummary: "none",
+		reviewDecision: "REVIEW_REQUIRED",
+		mergeCommitSha: null,
+		mergedAt: null,
+		closedAt: null,
+		updatedAt: null,
+		mergeable: null,
+	};
+	state.statuses.set(prNumber, {
+		...base,
+		...patch,
+		checks: patch.checks ?? base.checks,
+		updatedAt: patch.updatedAt ?? new Date().toISOString(),
+	});
+}
+
 // ── Fake AutopilotRunner ────────────────────────────────────────────────
 
 export interface FakeAutopilotState {

@@ -296,7 +296,10 @@ describe("Phase 1 owner journey", () => {
 		expect(Number(prsAgain[0]?.n)).toBe(1);
 
 		// ── Step 8: Current-head CI running stays CI_RUNNING ──
+		// Advance the shared test clock between polls so stale-observation
+		// protection cannot discard newer current-head status.
 		const headSha = String(prs[0]?.original_head_sha ?? "feature-sha-1");
+		ctx.clock.advanceMs(1_000);
 		ctx.setPullRequestStatus(prNumber, {
 			state: "open",
 			currentHeadSha: headSha,
@@ -308,6 +311,7 @@ describe("Phase 1 owner journey", () => {
 		expect((await getFeatureById(ctx.sql, featureId))?.state).toBe("CI_RUNNING");
 
 		// ── Step 9: CI pass → PR_REVIEW ──
+		ctx.clock.advanceMs(1_000);
 		ctx.setPullRequestStatus(prNumber, {
 			state: "open",
 			currentHeadSha: headSha,
@@ -319,6 +323,7 @@ describe("Phase 1 owner journey", () => {
 		expect((await getFeatureById(ctx.sql, featureId))?.state).toBe("PR_REVIEW");
 
 		// ── Step 10: External merge (outside Console) → DEVELOPMENT_MERGED ──
+		ctx.clock.advanceMs(1_000);
 		ctx.mergePrExternally(prNumber, "merge-sha-e2e-1");
 		expect(await ctx.githubRuntime.pollOnce()).toBeGreaterThan(0);
 		expect((await getFeatureById(ctx.sql, featureId))?.state).toBe("DEVELOPMENT_MERGED");
@@ -381,7 +386,8 @@ describe("Phase 1 owner journey", () => {
 		// Production composition must not reintroduce private one-shot shortcuts that
 		// bypass the durable outbox / supervisor path used in apps/worker main.
 		expect(
-			"runDevelopmentOnce" in ctx && typeof (ctx as { runDevelopmentOnce?: unknown }).runDevelopmentOnce,
+			"runDevelopmentOnce" in ctx &&
+				typeof (ctx as { runDevelopmentOnce?: unknown }).runDevelopmentOnce,
 		).toBe(false);
 		expect("runPrHandoff" in ctx && typeof (ctx as { runPrHandoff?: unknown }).runPrHandoff).toBe(
 			false,
