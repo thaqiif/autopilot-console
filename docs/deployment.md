@@ -98,6 +98,35 @@ Autopilotagent runtime.
 Terminate TLS at a trusted reverse proxy. Production cookies are marked `Secure`
 from the API's production mode, so clients must use HTTPS through that proxy.
 
+## Supported single-server performance profile
+
+Phase 1 read-latency acceptance is measured against the **`phase-1-single-server`**
+profile: API, worker, and PostgreSQL on one host via Docker Compose (or the
+equivalent local Bun + local PostgreSQL layout used by the integration suite).
+
+| Parameter | Value |
+| --- | --- |
+| Profile name | `phase-1-single-server` |
+| Database | PostgreSQL 16 (local Docker Compose single-server) |
+| Default connection | `postgres://…@127.0.0.1:5432/autopilot_console` |
+| Seed scale | 10 projects, 100 releases, 500 non-archived features, four active jobs |
+| Measured endpoints | authenticated `GET /api/overview` and `GET /api/features/:id` |
+| Warm-up | discard first 5 samples per endpoint |
+| Measured samples | 40 timed warm reads per endpoint after warm-up |
+| Acceptance | at least 95% of samples under 1 second; report p95, sample count, warm-up policy, database profile, and failure diagnostics |
+| Gate | measured sample ratio / p95 — not a longer test timeout |
+
+Run the self-validating suite:
+
+```bash
+bun test tests/performance/portfolio-reads.test.ts
+```
+
+The suite verifies exact fixture cardinality before timing, records sample
+count / warm-up policy / p95 / database profile on every run, and fails with
+those diagnostics when the ratio budget is missed. Optimize projections or
+indexes only when measured p95 exceeds the target on this profile.
+
 ## Observability
 
 API and worker entrypoints emit redacted structured JSON logs with correlation,
