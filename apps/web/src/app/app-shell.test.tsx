@@ -9,14 +9,19 @@
 
 import { beforeEach, describe, expect, test } from "bun:test";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { AuthProvider, useAuth } from "../auth/auth-provider";
-import { AppShell } from "./app-shell";
+import type { ReactNode } from "react";
+import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
+import { createApiClient } from "../api/client";
+import { AuthProvider } from "../auth/auth-provider";
+import { LoginPage } from "../auth/login-page";
 import { ViewState } from "../components/feedback/view-state";
 import { DesktopNavigation } from "../components/navigation/desktop-navigation";
 import { MobileNavigation } from "../components/navigation/mobile-navigation";
-import { LoginPage } from "../auth/login-page";
-import { createApiClient } from "../api/client";
+import { AppShell } from "./app-shell";
+
+function RouterWrapper({ children }: { children: ReactNode }) {
+	return <MemoryRouter>{children}</MemoryRouter>;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -29,7 +34,11 @@ function renderAt(path: string, opts?: { authenticated?: boolean }) {
 		[
 			{
 				path: "/login",
-				element: <LoginPage />,
+				element: (
+					<AuthProvider initialAuthenticated={false}>
+						<LoginPage />
+					</AuthProvider>
+				),
 			},
 			{
 				path: "/",
@@ -43,6 +52,16 @@ function renderAt(path: string, opts?: { authenticated?: boolean }) {
 					{ path: "attention", element: <div data-testid="attention-page" /> },
 					{ path: "releases", element: <div data-testid="releases-page" /> },
 					{ path: "projects", element: <div data-testid="projects-page" /> },
+					{
+						path: "projects/:id",
+						element: <div data-testid="project-detail" />,
+						children: [
+							{
+								path: "releases/:releaseId",
+								element: <div data-testid="release-detail" />,
+							},
+						],
+					},
 					{ path: "activity", element: <div data-testid="activity-page" /> },
 					{ path: "settings", element: <div data-testid="settings-page" /> },
 				],
@@ -94,9 +113,12 @@ describe("desktop navigation", () => {
 
 	test("renders all six required desktop destinations", () => {
 		render(
-			<DesktopNavigation currentPath="/" />,
+			<RouterWrapper>
+				<DesktopNavigation currentPath="/" />
+			</RouterWrapper>,
 		);
 		const nav = screen.getByRole("navigation", { name: /main/i });
+		expect(nav.classList.contains("desktop-navigation")).toBe(true);
 		const links = nav.querySelectorAll("a");
 		expect(links.length).toBe(6);
 
@@ -119,7 +141,9 @@ describe("mobile navigation", () => {
 
 	test("renders at most four bottom-navigation items on mobile", () => {
 		render(
-			<MobileNavigation currentPath="/" />,
+			<RouterWrapper>
+				<MobileNavigation currentPath="/" />
+			</RouterWrapper>,
 		);
 		const nav = screen.getByRole("navigation", { name: /mobile/i });
 		const links = nav.querySelectorAll("a");
@@ -128,7 +152,9 @@ describe("mobile navigation", () => {
 
 	test("mobile nav includes Home, Attention, Releases, Projects", () => {
 		render(
-			<MobileNavigation currentPath="/" />,
+			<RouterWrapper>
+				<MobileNavigation currentPath="/" />
+			</RouterWrapper>,
 		);
 		const nav = screen.getByRole("navigation", { name: /mobile/i });
 		const destinations = Array.from(nav.querySelectorAll("a")).map((l) =>
@@ -142,14 +168,17 @@ describe("mobile navigation", () => {
 
 	test("activity and settings remain reachable secondarily on mobile", () => {
 		render(
-			<MobileNavigation currentPath="/" />,
+			<RouterWrapper>
+				<MobileNavigation currentPath="/" />
+			</RouterWrapper>,
 		);
 		const nav = screen.getByRole("navigation", { name: /mobile/i });
-		const primary = Array.from(nav.querySelectorAll("a")).map((l) =>
-			l.textContent?.toLowerCase(),
-		);
+		const primary = Array.from(nav.querySelectorAll("a")).map((l) => l.textContent?.toLowerCase());
 		expect(primary.some((d) => d?.includes("activity"))).toBe(false);
 		expect(primary.some((d) => d?.includes("settings"))).toBe(false);
+		expect(screen.getByRole("navigation", { name: /more/i })).toBeTruthy();
+		expect(screen.getByRole("link", { name: "Activity" })).toBeTruthy();
+		expect(screen.getByRole("link", { name: "Settings" })).toBeTruthy();
 	});
 });
 
@@ -206,11 +235,139 @@ describe("API client", () => {
 		expect(headers["x-correlation-id"]).toBeTruthy();
 	});
 
-	test("includes CSRF token for mutations", () => {
+	test("does not fabricate a CSRF token before authentication", () => {
 		const client = createApiClient({ baseUrl: "http://localhost:3000" });
 		const init = client.buildRequestInit("POST");
 		const headers = init.headers as Record<string, string>;
-		expect(headers["x-csrf-token"]).toBeTruthy();
+		expect(headers["x-csrf-token"]).toBeUndefined();
+	});
+
+	test("includes the server-issued CSRF token for mutations", () => {
+		const client = createApiClient({ baseUrl: "http://localhost:3000" });
+		client.setCsrfToken("issued-by-api");
+		const init = client.buildRequestInit("POST");
+		const headers = init.headers as Record<string, string>;
+		expect(headers["x-csrf-token"]).toBe("issued-by-api");
+	});
+
+	test("merges operationKey into mutation request bodies for backend idempotency", async () => {
+		let capturedBody: unknown;
+		const client = createApiClient({
+			baseUrl: "http://localhost:3000",
+			fetchOverride: async (_url, init) => {
+				capturedBody = init?.body ? JSON.parse(String(init.body)) : undefined;
+				return new Response(JSON.stringify({ ok: true, data: {} }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			},
+		});
+		await client.post("/api/projects", { name: "demo" }, { operationKey: "create-project:demo" });
+		expect(capturedBody).toEqual({ name: "demo", operationKey: "create-project:demo" });
+	});
+
+	test("exposes a stable generateOperationKey helper for mutation retries", () => {
+		const client = createApiClient({ baseUrl: "http://localhost:3000" });
+		const a = client.generateOperationKey({
+			operation: "approve_and_queue",
+			projectId: "proj-1",
+			featureId: "feat-1",
+		});
+		const b = client.generateOperationKey({
+			operation: "approve_and_queue",
+			projectId: "proj-1",
+			featureId: "feat-1",
+		});
+		expect(a).toBe(b);
+		expect(a).toContain("approve_and_queue");
+		expect(a).toContain("proj-1");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 5b. SSE disconnect reconciliation
+// ---------------------------------------------------------------------------
+
+describe("SSE disconnect reconciliation", () => {
+	test("invokes onDisconnect reconcile callback when the stream errors", async () => {
+		const { createSseClient } = await import("../api/sse");
+		const listeners: Record<string, Array<(event?: Event) => void>> = {};
+		class FakeEventSource {
+			url: string;
+			onerror: ((event: Event) => void) | null = null;
+			onmessage: ((event: MessageEvent) => void) | null = null;
+			readyState = 0;
+			constructor(url: string) {
+				this.url = url;
+				FakeEventSource.instances.push(this);
+			}
+			addEventListener(type: string, listener: (event?: Event) => void) {
+				listeners[type] ??= [];
+				listeners[type].push(listener);
+			}
+			close() {
+				this.readyState = 2;
+			}
+			static instances: FakeEventSource[] = [];
+		}
+		FakeEventSource.instances = [];
+
+		let reconcileCount = 0;
+		const sse = createSseClient({
+			url: "/api/events",
+			EventSourceImpl: FakeEventSource as unknown as typeof EventSource,
+			onDisconnect: () => {
+				reconcileCount += 1;
+			},
+		});
+		sse.connect();
+		expect(FakeEventSource.instances).toHaveLength(1);
+
+		const instance = FakeEventSource.instances[0];
+		expect(instance).toBeDefined();
+		instance?.onerror?.(new Event("error"));
+		await waitFor(() => {
+			expect(reconcileCount).toBe(1);
+		});
+		sse.close();
+	});
+
+	test("reconnects after disconnect and continues reconciling from REST via onDisconnect", async () => {
+		const { createSseClient } = await import("../api/sse");
+		class FakeEventSource {
+			url: string;
+			onerror: ((event: Event) => void) | null = null;
+			readyState = 0;
+			constructor(url: string) {
+				this.url = url;
+				FakeEventSource.instances.push(this);
+			}
+			addEventListener() {}
+			close() {
+				this.readyState = 2;
+			}
+			static instances: FakeEventSource[] = [];
+		}
+		FakeEventSource.instances = [];
+
+		const reconnections: string[] = [];
+		const sse = createSseClient({
+			url: "/api/events",
+			EventSourceImpl: FakeEventSource as unknown as typeof EventSource,
+			reconnectDelayMs: 5,
+			onDisconnect: () => {
+				reconnections.push("reconcile");
+			},
+		});
+		sse.connect();
+		const first = FakeEventSource.instances[0];
+		expect(first).toBeDefined();
+		first?.onerror?.(new Event("error"));
+		await waitFor(() => {
+			expect(FakeEventSource.instances.length).toBeGreaterThanOrEqual(2);
+		});
+		expect(reconnections.length).toBeGreaterThanOrEqual(1);
+		sse.close();
 	});
 });
 

@@ -1,2 +1,3 @@
 [test]
 preload = ["./test-setup.ts"]
+exclude = ["**/e2e/**", "./e2e/**", "**/*.spec.ts", "**/*.spec.tsx"]
