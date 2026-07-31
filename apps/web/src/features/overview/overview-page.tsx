@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { createSseClient } from "../../api/sse";
+import { isUnauthorized } from "../../api/result";
+import { useSseRestRefresh } from "../../api/use-sse-rest-refresh";
 import { useAuth } from "../../auth/auth-provider";
 import { ViewState } from "../../components/feedback/view-state";
 import { SummaryCard } from "../../components/metrics/summary-card";
@@ -40,10 +41,6 @@ const DEFAULT_METRICS: OverviewMetrics = {
 	developmentMergedReleases: 0,
 };
 
-function isUnauthorized(result: { ok: boolean; error?: { code?: string; httpStatus?: number } }) {
-	return !result.ok && (result.error?.code === "UNAUTHORIZED" || result.error?.httpStatus === 401);
-}
-
 export function OverviewPage() {
 	const { client } = useAuth();
 	const [metrics, setMetrics] = useState<OverviewMetrics>(DEFAULT_METRICS);
@@ -52,67 +49,45 @@ export function OverviewPage() {
 	const [state, setState] = useState<PageState>("loading");
 	const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-	const loadData = useCallback(
-		async (options?: { preserveReady?: boolean }) => {
-			if (!options?.preserveReady) {
-				setState((current) => (current === "ready" || current === "stale" ? "stale" : "loading"));
+	const loadData = useCallback(async () => {
+		try {
+			const [metricsRes, attentionRes, activityRes] = await Promise.all([
+				client.get<OverviewMetrics>("/api/overview"),
+				client.get<{ items: AttentionItemInput[] }>("/api/attention"),
+				client.get<{ items: ActivityEvent[] }>("/api/activity?limit=5"),
+			]);
+
+			if (
+				isUnauthorized(metricsRes) ||
+				isUnauthorized(attentionRes) ||
+				isUnauthorized(activityRes)
+			) {
+				setState("unauthorized");
+				return;
 			}
-			try {
-				const [metricsRes, attentionRes, activityRes] = await Promise.all([
-					client.get<OverviewMetrics>("/api/overview"),
-					client.get<{ items: AttentionItemInput[] }>("/api/attention"),
-					client.get<{ items: ActivityEvent[] }>("/api/activity?limit=5"),
-				]);
 
-				if (
-					isUnauthorized(metricsRes) ||
-					isUnauthorized(attentionRes) ||
-					isUnauthorized(activityRes)
-				) {
-					setState("unauthorized");
-					return;
-				}
-
-				if (!metricsRes.ok || !attentionRes.ok || !activityRes.ok) {
-					setState("error");
-					return;
-				}
-
-				setMetrics(metricsRes.data);
-				setAttention(
-					attentionRes.data.items.map((item) => {
-						const model = toAttentionCardModel(item);
-						return {
-							...model,
-							age: item.age ?? formatRelativeTime(item.ageBasis ?? model.age),
-						};
-					}),
-				);
-				setActivity(activityRes.data.items);
-				setLastUpdated(new Date());
-				setState("ready");
-			} catch {
+			if (!metricsRes.ok || !attentionRes.ok || !activityRes.ok) {
 				setState("error");
+				return;
 			}
-		},
-		[client],
-	);
+
+			setMetrics(metricsRes.data);
+			setAttention(attentionRes.data.items.map(toAttentionCardModel));
+			setActivity(activityRes.data.items);
+			setLastUpdated(new Date());
+			setState("ready");
+		} catch {
+			setState("error");
+		}
+	}, [client]);
 
 	useEffect(() => {
 		void loadData();
 	}, [loadData]);
 
-	useEffect(() => {
-		const sse = createSseClient({
-			url: "/api/events",
-			onDisconnect: () => {
-				setState((current) => (current === "ready" ? "stale" : current));
-				void loadData({ preserveReady: true });
-			},
-		});
-		sse.connect();
-		return () => sse.close();
-	}, [loadData]);
+	useSseRestRefresh(loadData, {
+		onStale: () => setState((current) => (current === "ready" ? "stale" : current)),
+	});
 
 	if (state === "loading") return <ViewState state="loading" />;
 	if (state === "unauthorized") return <ViewState state="unauthorized" />;
@@ -129,7 +104,6 @@ export function OverviewPage() {
 				</button>
 			</header>
 
-			{/* 1. Attention section — appears FIRST */}
 			<section aria-label="Needs your attention">
 				<h2>Needs Your Attention</h2>
 				{attention.length === 0 ? (
@@ -156,7 +130,6 @@ export function OverviewPage() {
 				)}
 			</section>
 
-			{/* 2. Metrics section */}
 			<section aria-label="Portfolio metrics">
 				<h2>Portfolio Overview</h2>
 				<dl>
@@ -177,7 +150,6 @@ export function OverviewPage() {
 				</dl>
 			</section>
 
-			{/* 3. Recent activity */}
 			<section aria-label="Recent activity">
 				<h2>Recent Activity</h2>
 				{activity.length === 0 ? (

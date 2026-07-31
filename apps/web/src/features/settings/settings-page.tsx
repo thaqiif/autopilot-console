@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { createSseClient } from "../../api/sse";
+import { isUnauthorized } from "../../api/result";
+import { useSseRestRefresh } from "../../api/use-sse-rest-refresh";
 import { useAuth } from "../../auth/auth-provider";
 import { ViewState } from "../../components/feedback/view-state";
 import { formatLocalDateTime } from "../../time/local-date-time";
@@ -20,10 +21,6 @@ interface HealthComponent {
 }
 
 type PageState = "loading" | "ready" | "error" | "stale" | "unauthorized";
-
-function isUnauthorized(result: { ok: boolean; error?: { code?: string; httpStatus?: number } }) {
-	return !result.ok && (result.error?.code === "UNAUTHORIZED" || result.error?.httpStatus === 401);
-}
 
 function detailValue(detail: Record<string, unknown> | undefined, key: string): string {
 	if (!detail || detail[key] === undefined || detail[key] === null) return "unknown";
@@ -57,17 +54,9 @@ export function SettingsPage() {
 		void loadHealth();
 	}, [loadHealth]);
 
-	useEffect(() => {
-		const sse = createSseClient({
-			url: "/api/events",
-			onDisconnect: () => {
-				setState((current) => (current === "ready" ? "stale" : current));
-				void loadHealth();
-			},
-		});
-		sse.connect();
-		return () => sse.close();
-	}, [loadHealth]);
+	useSseRestRefresh(loadHealth, {
+		onStale: () => setState((current) => (current === "ready" ? "stale" : current)),
+	});
 
 	if (state === "loading") return <ViewState state="loading" />;
 	if (state === "unauthorized") return <ViewState state="unauthorized" />;

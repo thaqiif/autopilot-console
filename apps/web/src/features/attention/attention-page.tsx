@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { createSseClient } from "../../api/sse";
+import { isUnauthorized } from "../../api/result";
+import { useSseRestRefresh } from "../../api/use-sse-rest-refresh";
 import { useAuth } from "../../auth/auth-provider";
 import { ViewState } from "../../components/feedback/view-state";
-import { formatRelativeTime } from "../../time/local-date-time";
 import { AttentionCard } from "./attention-card";
 import {
 	ATTENTION_CATEGORY_ORDER,
@@ -12,10 +12,6 @@ import {
 } from "./attention-model";
 
 type PageState = "loading" | "ready" | "error" | "stale" | "unauthorized";
-
-function isUnauthorized(result: { ok: boolean; error?: { code?: string; httpStatus?: number } }) {
-	return !result.ok && (result.error?.code === "UNAUTHORIZED" || result.error?.httpStatus === 401);
-}
 
 export function AttentionPage() {
 	const { client } = useAuth();
@@ -35,15 +31,7 @@ export function AttentionPage() {
 				setState("error");
 				return;
 			}
-			setItems(
-				res.data.items.map((item) => {
-					const model = toAttentionCardModel(item);
-					return {
-						...model,
-						age: item.age ?? formatRelativeTime(item.ageBasis ?? model.age),
-					};
-				}),
-			);
+			setItems(res.data.items.map(toAttentionCardModel));
 			setState("ready");
 		} catch {
 			setState("error");
@@ -54,17 +42,9 @@ export function AttentionPage() {
 		void loadAttention();
 	}, [loadAttention]);
 
-	useEffect(() => {
-		const sse = createSseClient({
-			url: "/api/events",
-			onDisconnect: () => {
-				setState((current) => (current === "ready" ? "stale" : current));
-				void loadAttention();
-			},
-		});
-		sse.connect();
-		return () => sse.close();
-	}, [loadAttention]);
+	useSseRestRefresh(loadAttention, {
+		onStale: () => setState((current) => (current === "ready" ? "stale" : current)),
+	});
 
 	if (state === "loading") return <ViewState state="loading" />;
 	if (state === "unauthorized") return <ViewState state="unauthorized" />;

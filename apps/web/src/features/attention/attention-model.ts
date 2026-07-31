@@ -4,6 +4,8 @@
  * the human-readable fixture shape used by unit tests.
  */
 
+import { formatRelativeTime } from "../../time/local-date-time";
+
 export interface AttentionItemInput {
 	projectId: string;
 	releaseId?: string | null;
@@ -28,7 +30,6 @@ export interface AttentionCardModel {
 	age: string;
 	category: string;
 	primaryAction: string;
-	primaryActionCode: string;
 	href: string;
 	external: boolean;
 }
@@ -53,10 +54,6 @@ const ACTION_LABELS: Record<string, string> = {
 	open_github_pr: "View on GitHub",
 	resolve_block: "View details",
 	refresh_github_status: "View details",
-	"Review tasks": "Review tasks",
-	"View failure": "View failure",
-	"View on GitHub": "View on GitHub",
-	"View details": "View details",
 };
 
 const CATEGORY_REASON: Record<string, string> = {
@@ -71,7 +68,12 @@ const CATEGORY_REASON: Record<string, string> = {
 	stale_github_sync: "GitHub status is stale",
 };
 
-const HUMAN_ACTIONS = new Set(["Review tasks", "View failure", "View on GitHub", "View details"]);
+const HUMAN_ACTION_BY_LABEL: Record<string, string> = {
+	"Review tasks": "review_tasks",
+	"View failure": "retry_development",
+	"View on GitHub": "open_github_pr",
+	"View details": "resolve_block",
+};
 
 export function formatAttentionCategory(category: string): string {
 	return category
@@ -85,7 +87,11 @@ export function labelForPrimaryAction(action: string): string {
 }
 
 export function normalizePrimaryActionCode(action: string, category: string): string {
-	if (!HUMAN_ACTIONS.has(action)) return action;
+	if (ACTION_LABELS[action]) return action;
+
+	const fromLabel = HUMAN_ACTION_BY_LABEL[action];
+	if (!fromLabel) return action;
+
 	switch (category) {
 		case "task_review":
 			return "review_tasks";
@@ -104,7 +110,7 @@ export function normalizePrimaryActionCode(action: string, category: string): st
 		case "blocked":
 			return "resolve_block";
 		default:
-			return action;
+			return fromLabel;
 	}
 }
 
@@ -159,14 +165,8 @@ export function toAttentionCardModel(input: AttentionItemInput): AttentionCardMo
 	const rawReason = input.reason ?? input.category;
 	const reason =
 		rawReason.includes("_") && CATEGORY_REASON[rawReason] ? CATEGORY_REASON[rawReason] : rawReason;
-	const age =
-		input.age ??
-		(input.ageBasis
-			? // Keep ISO basis readable when relative formatting is unavailable to callers.
-				input.ageBasis
-			: "");
+	const age = input.age ?? (input.ageBasis ? formatRelativeTime(input.ageBasis) : "");
 	const primaryAction = labelForPrimaryAction(input.primaryAction);
-	const primaryActionCode = normalizePrimaryActionCode(input.primaryAction, input.category);
 	const { href, external } = resolveAttentionHref(input);
 
 	return {
@@ -178,7 +178,6 @@ export function toAttentionCardModel(input: AttentionItemInput): AttentionCardMo
 		age,
 		category: input.category,
 		primaryAction,
-		primaryActionCode,
 		href,
 		external,
 	};
