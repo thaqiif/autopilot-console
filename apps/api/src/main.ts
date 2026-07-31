@@ -46,6 +46,7 @@ export async function startApi() {
 		const github = new GhCliGateway();
 		const autopilot = new CliAutopilotRunner({ executablePath: process.env.AUTOPILOTAGENT_BIN });
 		// Durable SQL-only retry: no Autopilot process probes in API request scope.
+		// Queued cancel is durable in the route; running cancel is worker-owned.
 		const retry = createRetryService({ sql: database.sql });
 		const healthProbes = createProductionHealthProbes(database.sql, autopilot, github, metrics);
 		const port = Number(process.env.PORT) || 3000;
@@ -66,12 +67,6 @@ export async function startApi() {
 				releaseService: createReleaseService({ sql: database.sql }),
 				featureService: createFeatureService({ sql: database.sql }),
 				taskApprovalService: createTaskApprovalService({ sql: database.sql }),
-				// Queued cancel is durable in the route; running cancel is worker-owned.
-				cancelHandler: async (attempt) => ({
-					kind: "blocked",
-					attemptId: attempt.id,
-					reason: "Running cancellation must be performed by the owning worker.",
-				}),
 				retryHandler: (request) => retry.retry(request),
 			},
 		});
