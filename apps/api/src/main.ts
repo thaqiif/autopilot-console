@@ -98,11 +98,30 @@ interface AutopilotHealthAdapter {
 	validateRuntime(): Promise<{ ok: boolean }>;
 }
 
+interface GithubAuthenticationResult {
+	ok: boolean;
+	authenticated: boolean;
+}
+
+interface GithubAccessResult {
+	ok: boolean;
+	authenticated: boolean;
+	repositoryReadable?: boolean;
+}
+
 interface GithubHealthAdapter {
+	/** Session-level authentication check (no project/repository required). */
+	validateAuthentication(): Promise<GithubAuthenticationResult>;
+	/** Optional project repository access check. */
 	validateAccess(input: {
 		repository: { owner: string; repository: string; fullName: string };
 		projectRoot: string;
-	}): Promise<{ ok: boolean; authenticated: boolean }>;
+	}): Promise<GithubAccessResult>;
+}
+
+/** Bounded, redacted probe detail — never include credentials or raw adapter text. */
+function probeDetail(detail: Record<string, unknown>): Record<string, unknown> {
+	return detail;
 }
 
 export function createProductionHealthProbes(
@@ -115,81 +134,183 @@ export function createProductionHealthProbes(
 		database: {
 			name: "database",
 			check: async () => {
-				await sql`SELECT 1`;
-				return { ok: true };
+				try {
+					await sql`SELECT 1`;
+					return { ok: true, detail: probeDetail({ available: true }) };
+				} catch {
+					return { ok: false, detail: probeDetail({ available: false }) };
+				}
 			},
 		},
 		worker: {
 			name: "worker",
 			check: async () => {
-				const rows = await sql`
-					SELECT worker_id, hostname, capacity, active_jobs, last_heartbeat_at
-					FROM worker_registrations
-					WHERE stopped_at IS NULL AND last_heartbeat_at > now() - interval '30 seconds'
-					ORDER BY last_heartbeat_at DESC LIMIT 1
-				`;
-				const worker = rows[0];
-				if (!worker) {
+				try {
+					const rows = await sql`
+						SELECT worker_id, hostname, capacity, active_jobs, last_heartbeat_at
+						FROM worker_registrations
+						WHERE stopped_at IS NULL AND last_heartbeat_at > now() - interval '30 seconds'
+						ORDER BY last_heartbeat_at DESC LIMIT 1
+					`;
+					const worker = rows[0];
+					if (!worker) {
+						metricsCollector.setActiveJobs(0, 0);
+						metricsCollector.setHeartbeatAge(Number.POSITIVE_INFINITY);
+						return {
+							ok: false,
+							detail: probeDetail({
+								active: false,
+								capacity: 0,
+								activeJobs: 0,
+								availableSlots: 0,
+								lastHeartbeatAt: null,
+							}),
+						};
+					}
+					const capacity = Number(worker.capacity);
+					const activeJobs = Number(worker.active_jobs);
+					const lastHeartbeatAt = worker.last_heartbeat_at as Date;
+					const heartbeatAge = Math.max(0, Date.now() - lastHeartbeatAt.getTime());
+					metricsCollector.setActiveJobs(activeJobs, capacity);
+					metricsCollector.setHeartbeatAge(heartbeatAge);
+					return {
+						ok: true,
+						detail: probeDetail({
+							active: true,
+							capacity,
+							activeJobs,
+							availableSlots: Math.max(0, capacity - activeJobs),
+							lastHeartbeatAt: lastHeartbeatAt.toISOString(),
+							heartbeatAge,
+							metrics: metricsCollector.snapshot(),
+						}),
+					};
+				} catch {
 					metricsCollector.setActiveJobs(0, 0);
 					metricsCollector.setHeartbeatAge(Number.POSITIVE_INFINITY);
 					return {
 						ok: false,
-						detail: {
+						detail: probeDetail({
 							active: false,
 							capacity: 0,
 							activeJobs: 0,
 							availableSlots: 0,
 							lastHeartbeatAt: null,
-						},
+						}),
 					};
 				}
-				const capacity = Number(worker.capacity);
-				const activeJobs = Number(worker.active_jobs);
-				const lastHeartbeatAt = worker.last_heartbeat_at as Date;
-				const heartbeatAge = Math.max(0, Date.now() - lastHeartbeatAt.getTime());
-				metricsCollector.setActiveJobs(activeJobs, capacity);
-				metricsCollector.setHeartbeatAge(heartbeatAge);
-				return {
-					ok: true,
-					detail: {
-						active: true,
-						capacity,
-						activeJobs,
-						availableSlots: Math.max(0, capacity - activeJobs),
-						lastHeartbeatAt: lastHeartbeatAt.toISOString(),
-						heartbeatAge,
-						metrics: metricsCollector.snapshot(),
-					},
-				};
 			},
 		},
 		autopilot: {
 			name: "autopilot",
 			check: async () => {
-				const result = await autopilot.validateRuntime();
-				return { ok: result.ok, detail: { available: result.ok } };
+				try {
+					const result = await autopilot.validateRuntime();
+					return {
+						ok: result.ok,
+						detail: probeDetail({ available: result.ok }),
+					};
+				} catch {
+					return { ok: false, detail: probeDetail({ available: false }) };
+				}
 			},
 		},
 		github: {
 			name: "github",
 			check: async () => {
-				const [project] = await sql`
-					SELECT github_owner, github_repo, canonical_path FROM projects
-					WHERE archived_at IS NULL ORDER BY created_at ASC LIMIT 1
-				`;
-				if (!project) return { ok: true, detail: { configured: true, projectAvailable: false } };
-				const owner = project.github_owner as string;
-				const repository = project.github_repo as string;
+				// Always verify authentication, even when no project is registered.
+				let authenticated = false;
+				try {
+					const auth = await github.validateAuthentication();
+					authenticated = auth.authenticated === true && auth.ok === true;
+				} catch {
+					authenticated = false;
+				}
+
+				let project:
+					| {
+							github_owner: string;
+							github_repo: string;
+							canonical_path: string;
+					  }
+					| undefined;
+				try {
+					const [row] = await sql`
+						SELECT github_owner, github_repo, canonical_path FROM projects
+						WHERE archived_at IS NULL ORDER BY created_at ASC LIMIT 1
+					`;
+					if (row) {
+						project = {
+							github_owner: row.github_owner as string,
+							github_repo: row.github_repo as string,
+							canonical_path: row.canonical_path as string,
+						};
+					}
+				} catch {
+					// Project lookup failure is not fatal for auth-only readiness.
+					project = undefined;
+				}
+
+				if (!project) {
+					if (!authenticated) {
+						return {
+							ok: false,
+							detail: probeDetail({
+								authenticated: false,
+								projectAvailable: false,
+							}),
+						};
+					}
+					return {
+						ok: true,
+						detail: probeDetail({
+							authenticated: true,
+							projectAvailable: false,
+						}),
+					};
+				}
+
+				if (!authenticated) {
+					metricsCollector.incrementAdapterError("github");
+					return {
+						ok: false,
+						detail: probeDetail({
+							authenticated: false,
+							projectAvailable: true,
+							repositoryReadable: false,
+						}),
+					};
+				}
+
+				const owner = project.github_owner;
+				const repository = project.github_repo;
 				try {
 					const result = await github.validateAccess({
 						repository: { owner, repository, fullName: `${owner}/${repository}` },
-						projectRoot: project.canonical_path as string,
+						projectRoot: project.canonical_path,
 					});
-					if (!result.ok) metricsCollector.incrementAdapterError("github");
-					return { ok: result.ok, detail: { authenticated: result.authenticated } };
+					const repositoryReadable = result.repositoryReadable === true && result.ok === true;
+					if (!result.ok || !repositoryReadable) {
+						metricsCollector.incrementAdapterError("github");
+					}
+					return {
+						ok: result.ok && repositoryReadable,
+						detail: probeDetail({
+							authenticated: result.authenticated === true,
+							projectAvailable: true,
+							repositoryReadable,
+						}),
+					};
 				} catch {
 					metricsCollector.incrementAdapterError("github");
-					return { ok: false, detail: { authenticated: false } };
+					return {
+						ok: false,
+						detail: probeDetail({
+							authenticated: true,
+							projectAvailable: true,
+							repositoryReadable: false,
+						}),
+					};
 				}
 			},
 		},

@@ -108,6 +108,31 @@ export class GhCliGateway implements GitHubGateway {
 		return this.run(argv);
 	}
 
+	/**
+	 * Session-level authentication probe used by readiness when no project
+	 * repository is available. Never returns credentials or raw command output.
+	 */
+	async validateAuthentication(): Promise<{
+		ok: boolean;
+		authenticated: boolean;
+		login: string | null;
+	}> {
+		const auth = this.#invoke(["auth", "status", "--json", "hosts"]);
+		if (auth.status !== 0) {
+			return { ok: false, authenticated: false, login: null };
+		}
+		try {
+			const parsed = parseAuthHosts(parseJsonStdout(auth.stdout));
+			return {
+				ok: parsed.ok,
+				authenticated: parsed.ok,
+				login: parsed.login,
+			};
+		} catch {
+			return { ok: false, authenticated: false, login: null };
+		}
+	}
+
 	async validateAccess(request: ValidateAccessRequest): Promise<ValidateAccessResult> {
 		assertRepo(request.repository);
 		const failures: Array<{ code: string; message: string }> = [];
@@ -116,50 +141,15 @@ export class GhCliGateway implements GitHubGateway {
 		let repositoryReadable = false;
 		let pushFeasible: boolean | null = null;
 
-		const auth = this.#invoke(["auth", "status", "--json", "hosts"]);
-		if (auth.status !== 0) {
-			failures.push(
-				safeFailure(
-					"AUTH_REQUIRED",
-					auth.stderr.trim() || auth.stdout.trim() || "gh auth status failed",
-				),
-			);
-			return {
-				ok: false,
-				authenticated: false,
-				login: null,
-				repositoryReadable: false,
-				pushFeasible: null,
-				failures,
-			};
-		}
-
-		try {
-			const parsed = parseAuthHosts(parseJsonStdout(auth.stdout));
-			authenticated = parsed.ok;
-			login = parsed.login;
-			if (!parsed.ok) {
-				failures.push(safeFailure("AUTH_REQUIRED", "No successful GitHub authentication"));
-			}
-		} catch (e) {
-			failures.push(
-				safeFailure("AUTH_REQUIRED", e instanceof Error ? e.message : "invalid auth status JSON"),
-			);
-			return {
-				ok: false,
-				authenticated: false,
-				login: null,
-				repositoryReadable: false,
-				pushFeasible: null,
-				failures,
-			};
-		}
-
+		const auth = await this.validateAuthentication();
+		authenticated = auth.authenticated;
+		login = auth.login;
 		if (!authenticated) {
+			failures.push(safeFailure("AUTH_REQUIRED", "No successful GitHub authentication"));
 			return {
 				ok: false,
-				authenticated,
-				login,
+				authenticated: false,
+				login: null,
 				repositoryReadable: false,
 				pushFeasible: null,
 				failures,

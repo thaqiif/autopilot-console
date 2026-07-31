@@ -14,6 +14,7 @@ import {
 	applyCoreMigration,
 	applyWorkflowMigration,
 	createIsolatedTestDatabase,
+	createWorkspace,
 	DATABASE_URL,
 	type DatabaseClient,
 	type Sql,
@@ -332,7 +333,14 @@ describe("production dependency health", () => {
 		const probes = createProductionHealthProbes(
 			sql,
 			{ validateRuntime: async () => ({ ok: true, message: "ok" }) },
-			{ validateAccess: async () => ({ ok: true, authenticated: true }) },
+			{
+				validateAuthentication: async () => ({ ok: true, authenticated: true }),
+				validateAccess: async () => ({
+					ok: true,
+					authenticated: true,
+					repositoryReadable: true,
+				}),
+			},
 		);
 
 		const result = await probes.worker.check();
@@ -343,6 +351,274 @@ describe("production dependency health", () => {
 			availableSlots: 2,
 		});
 		expect(result.detail?.lastHeartbeatAt).toBeDefined();
+	});
+
+	test("worker readiness is unhealthy when no registration exists", async () => {
+		await sql`DELETE FROM worker_registrations`;
+		const probes = createProductionHealthProbes(
+			sql,
+			{ validateRuntime: async () => ({ ok: true, message: "ok" }) },
+			{
+				validateAuthentication: async () => ({ ok: true, authenticated: true }),
+				validateAccess: async () => ({
+					ok: true,
+					authenticated: true,
+					repositoryReadable: true,
+				}),
+			},
+		);
+
+		const result = await probes.worker.check();
+		expect(result.ok).toBe(false);
+		expect(result.detail).toMatchObject({
+			active: false,
+			capacity: 0,
+			activeJobs: 0,
+			availableSlots: 0,
+			lastHeartbeatAt: null,
+		});
+	});
+
+	test("worker readiness is unhealthy when the latest heartbeat is stale", async () => {
+		await sql`DELETE FROM worker_registrations`;
+		await sql`
+			INSERT INTO worker_registrations (
+				worker_id, hostname, capacity, active_jobs, last_heartbeat_at
+			) VALUES (
+				'worker-stale',
+				'worker-host',
+				4,
+				1,
+				now() - interval '2 minutes'
+			)
+		`;
+		const probes = createProductionHealthProbes(
+			sql,
+			{ validateRuntime: async () => ({ ok: true, message: "ok" }) },
+			{
+				validateAuthentication: async () => ({ ok: true, authenticated: true }),
+				validateAccess: async () => ({
+					ok: true,
+					authenticated: true,
+					repositoryReadable: true,
+				}),
+			},
+		);
+
+		const result = await probes.worker.check();
+		expect(result.ok).toBe(false);
+		expect(result.detail).toMatchObject({
+			active: false,
+			capacity: 0,
+			activeJobs: 0,
+			availableSlots: 0,
+		});
+	});
+
+	test("database readiness fails without leaking connection details", async () => {
+		const failingSql = Object.assign(
+			async () => {
+				throw new Error("postgres://owner:s3cret@database/private");
+			},
+			{
+				unsafe: async () => {
+					throw new Error("postgres://owner:s3cret@database/private");
+				},
+			},
+		) as unknown as typeof sql;
+		const probes = createProductionHealthProbes(
+			failingSql,
+			{ validateRuntime: async () => ({ ok: true, message: "ok" }) },
+			{
+				validateAuthentication: async () => ({ ok: true, authenticated: true }),
+				validateAccess: async () => ({
+					ok: true,
+					authenticated: true,
+					repositoryReadable: true,
+				}),
+			},
+		);
+
+		const result = await probes.database.check();
+		expect(result.ok).toBe(false);
+		expect(JSON.stringify(result)).not.toContain("s3cret");
+		expect(JSON.stringify(result)).not.toContain("postgres://");
+	});
+
+	test("autopilot readiness fails when the runtime is unavailable", async () => {
+		const probes = createProductionHealthProbes(
+			sql,
+			{ validateRuntime: async () => ({ ok: false, message: "binary missing" }) },
+			{
+				validateAuthentication: async () => ({ ok: true, authenticated: true }),
+				validateAccess: async () => ({
+					ok: true,
+					authenticated: true,
+					repositoryReadable: true,
+				}),
+			},
+		);
+
+		const result = await probes.autopilot.check();
+		expect(result.ok).toBe(false);
+		expect(result.detail).toMatchObject({ available: false });
+		expect(JSON.stringify(result)).not.toContain("binary missing");
+	});
+
+	test("GitHub readiness verifies authentication when no project is registered", async () => {
+		await sql`DELETE FROM projects`;
+		let authCalls = 0;
+		let accessCalls = 0;
+		const probes = createProductionHealthProbes(
+			sql,
+			{ validateRuntime: async () => ({ ok: true, message: "ok" }) },
+			{
+				validateAuthentication: async () => {
+					authCalls += 1;
+					return { ok: true, authenticated: true };
+				},
+				validateAccess: async () => {
+					accessCalls += 1;
+					return {
+						ok: true,
+						authenticated: true,
+						repositoryReadable: true,
+					};
+				},
+			},
+		);
+
+		const result = await probes.github.check();
+		expect(result.ok).toBe(true);
+		expect(result.detail).toMatchObject({
+			authenticated: true,
+			projectAvailable: false,
+		});
+		expect(authCalls).toBe(1);
+		expect(accessCalls).toBe(0);
+	});
+
+	test("GitHub readiness is unhealthy when authentication fails with zero projects", async () => {
+		await sql`DELETE FROM projects`;
+		const probes = createProductionHealthProbes(
+			sql,
+			{ validateRuntime: async () => ({ ok: true, message: "ok" }) },
+			{
+				validateAuthentication: async () => ({ ok: false, authenticated: false }),
+				validateAccess: async () => {
+					throw new Error("validateAccess must not run without a project");
+				},
+			},
+		);
+
+		const result = await probes.github.check();
+		expect(result.ok).toBe(false);
+		expect(result.detail).toMatchObject({
+			authenticated: false,
+			projectAvailable: false,
+		});
+	});
+
+	test("GitHub readiness reports repository access separately when a project exists", async () => {
+		await sql`DELETE FROM projects`;
+		const workspace = await createWorkspace(sql);
+		const workspaceId = workspace.id;
+		await sql`
+			INSERT INTO projects (
+				workspace_id, name, slug, github_owner, github_repo,
+				canonical_path, development_branch
+			) VALUES (
+				${workspaceId},
+				'Health Project',
+				'health-project',
+				'acme',
+				'widget',
+				'/workspaces/widget',
+				'main'
+			)
+		`;
+		let accessCalls = 0;
+		const probes = createProductionHealthProbes(
+			sql,
+			{ validateRuntime: async () => ({ ok: true, message: "ok" }) },
+			{
+				validateAuthentication: async () => ({ ok: true, authenticated: true }),
+				validateAccess: async (input) => {
+					accessCalls += 1;
+					expect(input.repository.fullName).toBe("acme/widget");
+					expect(input.projectRoot).toBe("/workspaces/widget");
+					return {
+						ok: false,
+						authenticated: true,
+						repositoryReadable: false,
+					};
+				},
+			},
+		);
+
+		const result = await probes.github.check();
+		expect(result.ok).toBe(false);
+		expect(result.detail).toMatchObject({
+			authenticated: true,
+			projectAvailable: true,
+			repositoryReadable: false,
+		});
+		expect(accessCalls).toBe(1);
+	});
+
+	test("GitHub readiness is healthy when project repository access succeeds", async () => {
+		await sql`DELETE FROM projects`;
+		const workspace = await createWorkspace(sql);
+		const workspaceId = workspace.id;
+		await sql`
+			INSERT INTO projects (
+				workspace_id, name, slug, github_owner, github_repo,
+				canonical_path, development_branch
+			) VALUES (
+				${workspaceId},
+				'Healthy Repo',
+				'healthy-repo',
+				'acme',
+				'widget',
+				'/workspaces/widget',
+				'main'
+			)
+		`;
+		const probes = createProductionHealthProbes(
+			sql,
+			{ validateRuntime: async () => ({ ok: true, message: "ok" }) },
+			{
+				validateAuthentication: async () => ({ ok: true, authenticated: true }),
+				validateAccess: async () => ({
+					ok: true,
+					authenticated: true,
+					repositoryReadable: true,
+				}),
+			},
+		);
+
+		const result = await probes.github.check();
+		expect(result.ok).toBe(true);
+		expect(result.detail).toMatchObject({
+			authenticated: true,
+			projectAvailable: true,
+			repositoryReadable: true,
+		});
+	});
+
+	test("liveness stays ok when readiness dependencies are down", async () => {
+		const { createHealthService } = await import("./health/health-service");
+		const service = createHealthService({
+			now: () => new Date("2026-07-19T00:00:00.000Z"),
+			database: { name: "database", check: async () => ({ ok: false }) },
+			worker: { name: "worker", check: async () => ({ ok: false }) },
+			autopilot: { name: "autopilot", check: async () => ({ ok: false }) },
+			github: { name: "github", check: async () => ({ ok: false }) },
+		});
+
+		expect(service.liveness()).toBe("ok");
+		const readiness = await service.readiness();
+		expect(readiness.status).not.toBe("ok");
 	});
 });
 
