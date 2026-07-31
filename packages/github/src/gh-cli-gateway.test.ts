@@ -31,10 +31,11 @@ afterEach(() => {
 });
 
 describe("GitHubGateway public API surface", () => {
-	test("exposes only validateAccess, findExistingPullRequest, createPullRequest, getPullRequestStatus", () => {
+	test("exposes only authentication, access, find, create, and status operations", () => {
 		const { gw } = gateway();
 		const g = gw as unknown as Record<string, unknown>;
-		expect(typeof g.validateAccess).toBe("function");
+		expect(typeof g.validateAuthentication).toBe("function");
+			expect(typeof g.validateAccess).toBe("function");
 		expect(typeof g.findExistingPullRequest).toBe("function");
 		expect(typeof g.createPullRequest).toBe("function");
 		expect(typeof g.getPullRequestStatus).toBe("function");
