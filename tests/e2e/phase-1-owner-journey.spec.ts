@@ -1,13 +1,16 @@
 /**
- * Full Phase 1 owner journey E2E (requirement 31).
+ * Full Phase 1 owner journey E2E (requirement 41).
  *
  * Proves the complete lifecycle from login through external merge detection:
- *   login → register project → create release → create feature →
- *   attach task → approve & queue → verify attempt → PR handoff →
- *   external merge detection → audit/activity reconstruction.
+ *   login → register project → validate → create release → create feature →
+ *   attach task → approve & queue → production development supervisor →
+ *   production GitHub handoff consumer → current-head CI running/pass →
+ *   PR review → external merge detection → exact activity/audit reconstruction.
  *
  * Uses real PostgreSQL, fake external adapters, and real temp directories.
- * No arbitrary sleeps — all state changes are synchronous or event-driven.
+ * Durable command consumers and the production worker supervisor are shared;
+ * only Git/GitHub/Autopilot boundaries are substituted.
+ * No arbitrary sleeps — state advances via production run-once/drain helpers.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
@@ -30,13 +33,6 @@ import {
 
 let ctx: Phase1Context;
 let tempDir: string;
-
-const _ACTOR = {
-	actorType: "administrator" as const,
-	actorId: "admin-1",
-	actorDisplay: ADMIN_USERNAME,
-	correlationId: "e2e-journey-001",
-};
 
 const VALID_TASK = {
 	name: "test-feature",
@@ -66,13 +62,11 @@ async function loginApi(): Promise<string> {
 		password: ADMIN_PASSWORD,
 	});
 	if (!loginResult.ok) {
-		console.error("Login failed:", loginResult.status);
 		throw new Error(`Login failed: ${loginResult.status}`);
 	}
-	// Verify session is resolvable
 	const resolved = await ctx.sessionService.resolve({ rawToken: loginResult.token });
 	if (!resolved) {
-		console.error("Session not resolvable after directLogin! token:", loginResult.token);
+		throw new Error("Session not resolvable after directLogin");
 	}
 	return loginResult.token;
 }
@@ -94,13 +88,7 @@ async function apiCall(
 		headers["Content-Type"] = "application/json";
 		jsonBody = JSON.stringify(body);
 	}
-	const res = await ctx.api.app.request(path, { method, headers, body: jsonBody });
-	if (res.status === 401) {
-		console.error(
-			`apiCall 401: ${method} ${path}, token=${token.substring(0, 10)}..., cookie=${headers.Cookie.substring(0, 30)}...`,
-		);
-	}
-	return res;
+	return ctx.api.app.request(path, { method, headers, body: jsonBody });
 }
 
 beforeAll(async () => {
@@ -119,9 +107,16 @@ beforeEach(async () => {
 });
 
 describe("Phase 1 owner journey", () => {
-	test("unauthenticated visitor gets 401 on protected routes", async () => {
-		const res = await ctx.api.app.request("/api/projects", { method: "GET" });
-		expect(res.status).toBe(401);
+	test("unauthenticated visitor gets 401 on protected routes and cannot mutate", async () => {
+		const list = await ctx.api.app.request("/api/projects", { method: "GET" });
+		expect(list.status).toBe(401);
+
+		const create = await ctx.api.app.request("/api/projects", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ name: "Nope" }),
+		});
+		expect(create.status).toBe(401);
 	});
 
 	test("administrator can login and access protected routes", async () => {
@@ -134,13 +129,25 @@ describe("Phase 1 owner journey", () => {
 		expect(body.ok).toBe(true);
 	});
 
-	test("full journey: register → release → feature → attach → approve → queue → PR → merge", async () => {
+	test("full journey: register → validate → release → feature → attach → approve → production supervisor → CI → review → external merge", async () => {
 		const token = await loginApi();
 
-		// ── Step 1: Register project ──
+		// ── Step 1: Register + validate project ──
 		const projectDir = join(tempDir, "project-a");
 		await mkdir(projectDir, { recursive: true });
-		await writeFile(join(projectDir, ".git"), ""); // fake git repo marker
+		await writeFile(join(projectDir, ".git"), "");
+
+		const validateRes = await apiCall(token, "POST", "/api/projects/validate", {
+			name: "Project A",
+			slug: "project-a",
+			githubOwner: "acme",
+			githubRepo: "project-a",
+			workspacePath: projectDir,
+			developmentBranch: "main",
+		});
+		expect(validateRes.status).toBe(200);
+		const validateBody = await validateRes.json();
+		expect(validateBody.ok).toBe(true);
 
 		const createRes = await apiCall(token, "POST", "/api/projects", {
 			name: "Project A",
@@ -153,9 +160,8 @@ describe("Phase 1 owner journey", () => {
 		expect(createRes.status).toBe(201);
 		const projectBody = await createRes.json();
 		expect(projectBody.ok).toBe(true);
-		const projectId = projectBody.data.id;
+		const projectId = projectBody.data.id as string;
 
-		// Verify project persisted
 		const project = await getProjectById(ctx.sql, projectId);
 		expect(project).not.toBeNull();
 		expect(project?.name).toBe("Project A");
@@ -169,7 +175,7 @@ describe("Phase 1 owner journey", () => {
 		expect(releaseRes.status).toBe(201);
 		const releaseBody = await releaseRes.json();
 		expect(releaseBody.ok).toBe(true);
-		const releaseId = releaseBody.data.id;
+		const releaseId = releaseBody.data.id as string;
 
 		// ── Step 3: Create feature ──
 		const featureRes = await apiCall(token, "POST", "/api/features", {
@@ -182,9 +188,8 @@ describe("Phase 1 owner journey", () => {
 		expect(featureRes.status).toBe(201);
 		const featureBody = await featureRes.json();
 		expect(featureBody.ok).toBe(true);
-		const featureId = featureBody.data.id;
+		const featureId = featureBody.data.id as string;
 
-		// Verify feature state is PLANNED
 		const feature = await getFeatureById(ctx.sql, featureId);
 		expect(feature).not.toBeNull();
 		expect(feature?.state).toBe("PLANNED");
@@ -200,17 +205,16 @@ describe("Phase 1 owner journey", () => {
 		expect(attachRes.status).toBe(200);
 		const attachBody = await attachRes.json();
 		expect(attachBody.ok).toBe(true);
+		expect((await getFeatureById(ctx.sql, featureId))?.state).toBe("TASKS_REVIEW");
 
-		// Verify feature moved to TASKS_REVIEW
-		const featureAfterAttach = await getFeatureById(ctx.sql, featureId);
-		expect(featureAfterAttach?.state).toBe("TASKS_REVIEW");
-
-		// ── Step 5: Approve & Queue Development ──
+		// ── Step 5: Approve & Queue Development (durable API only) ──
 		const approval = attachBody.data?.approval;
 		const checksum = approval?.checksum ?? attachBody.data?.checksum;
 		expect(checksum).toBeTruthy();
 
 		const approveRes = await apiCall(token, "POST", `/api/features/${featureId}/approve-queue`, {
+			projectId,
+			featureId,
 			displayedChecksum: checksum,
 			operationKey: `approve-${featureId}-1`,
 			confirmation: "approve-and-queue",
@@ -219,39 +223,19 @@ describe("Phase 1 owner journey", () => {
 		const approveBody = await approveRes.json();
 		expect(approveBody.ok).toBe(true);
 		expect(approveBody.data.attempt).toBeTruthy();
+		const attemptId = approveBody.data.attempt.id as string;
 
-		// Verify feature moved to QUEUED
-		const featureAfterApprove = await getFeatureById(ctx.sql, featureId);
-		expect(featureAfterApprove?.state).toBe("QUEUED");
-
-		// Verify attempt created
-		const attempt = await getDevelopmentAttempt(ctx.sql, approveBody.data.attempt.id);
+		expect((await getFeatureById(ctx.sql, featureId))?.state).toBe("QUEUED");
+		const attempt = await getDevelopmentAttempt(ctx.sql, attemptId);
 		expect(attempt).not.toBeNull();
 		expect(attempt?.status).toBe("QUEUED");
 		expect(attempt?.projectId).toBe(projectId);
 		expect(attempt?.featureId).toBe(featureId);
 
-		// ── Step 6: Check overview ──
-		const overviewRes = await apiCall(token, "GET", "/api/overview");
-		expect(overviewRes.status).toBe(200);
-		const overview = await overviewRes.json();
-		expect(overview.ok).toBe(true);
-
-		// ── Step 7: Check attention queue ──
-		const attentionRes = await apiCall(token, "GET", "/api/attention");
-		expect(attentionRes.status).toBe(200);
-
-		// ── Step 8: Check audit trail ──
-		const auditEvents = await listAuditEventsForTarget(ctx.sql, {
-			targetType: "project",
-			targetId: projectId,
-		});
-		expect(auditEvents.length).toBeGreaterThan(0);
-		const actions = auditEvents.map((e) => e.action);
-		expect(actions).toContain("project.create");
-
-		// ── Step 9: Verify idempotent approve ──
+		// Idempotent approve
 		const approveRes2 = await apiCall(token, "POST", `/api/features/${featureId}/approve-queue`, {
+			projectId,
+			featureId,
 			displayedChecksum: checksum,
 			operationKey: `approve-${featureId}-1`,
 			confirmation: "approve-and-queue",
@@ -259,19 +243,159 @@ describe("Phase 1 owner journey", () => {
 		expect(approveRes2.status).toBe(200);
 		const approveBody2 = await approveRes2.json();
 		expect(approveBody2.data.idempotent).toBe(true);
+
+		// ── Step 6: Production development supervisor claims and completes ──
+		// Must use the same concurrent supervisor path as apps/worker main, not a
+		// private one-shot helper that bypasses ownership heartbeats/capacity.
+		expect(ctx.developmentRuntime).toBeDefined();
+		expect(typeof ctx.developmentRuntime.capacity).toBe("function");
+		expect(ctx.developmentRuntime.capacity()).toBeGreaterThanOrEqual(1);
+
+		const workerOutcomes = await ctx.drainDevelopmentWork();
+		expect(workerOutcomes.some((o) => o.kind === "completed" && o.attemptId === attemptId)).toBe(
+			true,
+		);
+		expect((await getFeatureById(ctx.sql, featureId))?.state).toBe("DEVELOPMENT_COMPLETE");
+		const completedAttempt = await getDevelopmentAttempt(ctx.sql, attemptId);
+		expect(completedAttempt?.status).toBe("SUCCEEDED");
+
+		// Outbox intent must exist for production handoff consumer
+		const outbox = await ctx.sql`
+			SELECT kind, status, attempt_id FROM outbox_intents
+			WHERE feature_id = ${featureId} AND kind = 'create_pr'
+		`;
+		expect(outbox.length).toBe(1);
+		expect(outbox[0]?.attempt_id).toBe(attemptId);
+
+		// ── Step 7: Production GitHub runtime consumes create_pr outbox ──
+		expect(ctx.githubRuntime).toBeDefined();
+		const handoff = await ctx.githubRuntime.processPendingHandoffs();
+		expect(handoff.processed).toBeGreaterThanOrEqual(1);
+		expect(handoff.outcomes.some((o) => o.kind === "completed")).toBe(true);
+
+		const featureAfterPr = await getFeatureById(ctx.sql, featureId);
+		expect(featureAfterPr?.state).toBe("CI_RUNNING");
+		const prs = await ctx.sql`
+			SELECT number, head_branch, base_branch, original_head_sha
+			FROM pull_requests WHERE feature_id = ${featureId}
+		`;
+		expect(prs.length).toBe(1);
+		const prNumber = Number(prs[0]?.number);
+		expect(prNumber).toBeGreaterThan(0);
+
+		// Exactly one branch push was performed by the handoff worker
+		expect(ctx.gitState.pushes.length).toBe(1);
+		expect(ctx.gitState.pushes[0]?.featureBranch).toBe(String(prs[0]?.head_branch));
+
+		// Re-drain handoff: no duplicate PR
+		const handoffAgain = await ctx.githubRuntime.processPendingHandoffs();
+		expect(handoffAgain.processed).toBe(0);
+		const prsAgain = await ctx.sql`
+			SELECT count(*)::int AS n FROM pull_requests WHERE feature_id = ${featureId}
+		`;
+		expect(Number(prsAgain[0]?.n)).toBe(1);
+
+		// ── Step 8: Current-head CI running stays CI_RUNNING ──
+		const headSha = String(prs[0]?.original_head_sha ?? "feature-sha-1");
+		ctx.setPullRequestStatus(prNumber, {
+			state: "open",
+			currentHeadSha: headSha,
+			checkSummary: "pending",
+			reviewDecision: "REVIEW_REQUIRED",
+			checks: [{ name: "ci", conclusion: "pending", bucket: "pending", headSha }],
+		});
+		expect(await ctx.githubRuntime.pollOnce()).toBeGreaterThan(0);
+		expect((await getFeatureById(ctx.sql, featureId))?.state).toBe("CI_RUNNING");
+
+		// ── Step 9: CI pass → PR_REVIEW ──
+		ctx.setPullRequestStatus(prNumber, {
+			state: "open",
+			currentHeadSha: headSha,
+			checkSummary: "passing",
+			reviewDecision: "REVIEW_REQUIRED",
+			checks: [{ name: "ci", conclusion: "success", bucket: "pass", headSha }],
+		});
+		expect(await ctx.githubRuntime.pollOnce()).toBeGreaterThan(0);
+		expect((await getFeatureById(ctx.sql, featureId))?.state).toBe("PR_REVIEW");
+
+		// ── Step 10: External merge (outside Console) → DEVELOPMENT_MERGED ──
+		ctx.mergePrExternally(prNumber, "merge-sha-e2e-1");
+		expect(await ctx.githubRuntime.pollOnce()).toBeGreaterThan(0);
+		expect((await getFeatureById(ctx.sql, featureId))?.state).toBe("DEVELOPMENT_MERGED");
+
+		// ── Step 11: Overview, attention, activity, audit reconstruct the journey ──
+		const overviewRes = await apiCall(token, "GET", "/api/overview");
+		expect(overviewRes.status).toBe(200);
+		const overview = await overviewRes.json();
+		expect(overview.ok).toBe(true);
+
+		const attentionRes = await apiCall(token, "GET", "/api/attention");
+		expect(attentionRes.status).toBe(200);
+
+		const activityRes = await apiCall(token, "GET", "/api/activity");
+		expect(activityRes.status).toBe(200);
+
+		const activity = await ctx.sql`
+			SELECT type FROM activity_events
+			WHERE feature_id = ${featureId}
+			ORDER BY created_at ASC, id ASC
+		`;
+		const activityTypes = activity.map((row) => String(row.type));
+		expect(activityTypes).toContain("development.started");
+		expect(activityTypes).toContain("pr.created");
+		expect(activityTypes).toContain("ci.passed");
+		expect(activityTypes).toContain("pr.merged");
+
+		const featureAudit = await listAuditEventsForTarget(ctx.sql, {
+			targetType: "feature",
+			targetId: featureId,
+		});
+		const featureActions = featureAudit.map((e) => e.action);
+		expect(featureActions).toContain("pr.merged");
+
+		const projectAudit = await listAuditEventsForTarget(ctx.sql, {
+			targetType: "project",
+			targetId: projectId,
+		});
+		const projectActions = projectAudit.map((e) => e.action);
+		expect(projectActions).toContain("project.create");
+
+		// ── Step 12: Console exposes no PR approve or merge action ──
+		for (const path of [
+			`/api/features/${featureId}/pr-approve`,
+			`/api/features/${featureId}/pr-merge`,
+			`/api/pull-requests/${prNumber}/approve`,
+			`/api/pull-requests/${prNumber}/merge`,
+			`/api/prs/${prNumber}/approve`,
+			`/api/prs/${prNumber}/merge`,
+		]) {
+			const res = await apiCall(token, "POST", path, {
+				projectId,
+				featureId,
+				confirmation: "approve",
+			});
+			// 404 (no route) or 405 (method not allowed) — never a successful mutation.
+			expect([404, 405]).toContain(res.status);
+		}
+
+		// Production composition must not reintroduce private one-shot shortcuts that
+		// bypass the durable outbox / supervisor path used in apps/worker main.
+		expect(
+			"runDevelopmentOnce" in ctx && typeof (ctx as { runDevelopmentOnce?: unknown }).runDevelopmentOnce,
+		).toBe(false);
+		expect("runPrHandoff" in ctx && typeof (ctx as { runPrHandoff?: unknown }).runPrHandoff).toBe(
+			false,
+		);
 	});
 
 	test("logout invalidates session", async () => {
 		const token = await loginApi();
 
-		// Verify authenticated access
 		const before = await apiCall(token, "GET", "/api/projects");
 		expect(before.status).toBe(200);
 
-		// Logout
 		await ctx.api.logout(token);
 
-		// Verify session revoked
 		const after = await ctx.api.app.request("/api/projects", {
 			method: "GET",
 			headers: { Cookie: `ac_session=${token}` },
@@ -296,7 +420,6 @@ describe("Phase 1 owner journey", () => {
 	test("activity endpoint returns events after mutations", async () => {
 		const token = await loginApi();
 
-		// Create a project to generate activity
 		const projectDir = join(tempDir, "activity-test");
 		await mkdir(projectDir, { recursive: true });
 
