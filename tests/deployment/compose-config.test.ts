@@ -86,7 +86,7 @@ describe("service separation", () => {
 			// Monorepo builds use root context with specific dockerfile path
 			if (context === "." || context === "./") {
 				expect(dockerfile).toBeDefined();
-				expect(dockerfile!).toContain("apps/web");
+				expect(dockerfile ?? "").toContain("apps/web");
 			} else {
 				expect(context).toContain("apps/web");
 			}
@@ -105,7 +105,7 @@ describe("service separation", () => {
 			const dockerfile = (build as Record<string, unknown>).dockerfile as string | undefined;
 			if (context === "." || context === "./") {
 				expect(dockerfile).toBeDefined();
-				expect(dockerfile!).toContain("apps/api");
+				expect(dockerfile ?? "").toContain("apps/api");
 			} else {
 				expect(context).toContain("apps/api");
 			}
@@ -124,7 +124,7 @@ describe("service separation", () => {
 			const dockerfile = (build as Record<string, unknown>).dockerfile as string | undefined;
 			if (context === "." || context === "./") {
 				expect(dockerfile).toBeDefined();
-				expect(dockerfile!).toContain("apps/worker");
+				expect(dockerfile ?? "").toContain("apps/worker");
 			} else {
 				expect(context).toContain("apps/worker");
 			}
@@ -136,6 +136,202 @@ describe("service separation", () => {
 		const pg = services.postgres as Record<string, unknown>;
 		expect(pg.image).toBeDefined();
 		expect(pg.image as string).toMatch(/^postgres:/);
+	});
+});
+
+describe("production entrypoints", () => {
+	test("API container starts the executable server entrypoint", () => {
+		expect(fileExists("apps/api/src/main.ts")).toBe(true);
+		expect(readFile("apps/api/Dockerfile")).toContain('CMD ["bun", "run", "apps/api/src/main.ts"]');
+	});
+
+	test("worker container starts its executable polling entrypoint", () => {
+		expect(fileExists("apps/worker/src/main.ts")).toBe(true);
+		expect(readFile("apps/worker/Dockerfile")).toContain(
+			'CMD ["bun", "run", "apps/worker/src/main.ts"]',
+		);
+	});
+
+	test("database package exposes an executable forward-only migration command", () => {
+		expect(fileExists("packages/database/src/migrate.ts")).toBe(true);
+		const packageJson = JSON.parse(readFile("packages/database/package.json")) as {
+			scripts?: Record<string, string>;
+		};
+		expect(packageJson.scripts?.migrate).toBe("bun run src/migrate.ts");
+	});
+});
+
+describe("production runtime wiring", () => {
+	test("compose runs migrations before API and worker startup", () => {
+		const services = getServices(readCompose());
+		expect(services.migrate).toBeDefined();
+		for (const name of ["api", "worker"] as const) {
+			const dependencies = services[name]?.depends_on as Record<string, { condition?: string }>;
+			expect(dependencies.migrate?.condition).toBe("service_completed_successfully");
+		}
+	});
+
+	test("API and web expose real health checks", () => {
+		const services = getServices(readCompose());
+		expect(services.api?.healthcheck).toBeDefined();
+		expect(services.web?.healthcheck).toBeDefined();
+	});
+
+	test("web uses an unprivileged nginx image and high container port", () => {
+		const dockerfile = readFile("apps/web/Dockerfile");
+		expect(dockerfile).toContain("nginx-unprivileged");
+		expect(dockerfile).toContain("EXPOSE 8080");
+		expect(readFile("apps/web/nginx.conf")).toContain("listen 8080");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Requirement 39: production Compose isolation, health, secrets, tools
+// ---------------------------------------------------------------------------
+
+describe("production compose stack (requirement 39)", () => {
+	test("long-running services postgres, api, worker, and web each define a healthcheck", () => {
+		const services = getServices(readCompose());
+		for (const name of ["postgres", "api", "worker", "web"] as const) {
+			const healthcheck = services[name]?.healthcheck as Record<string, unknown> | undefined;
+			expect(healthcheck).toBeDefined();
+			expect(healthcheck?.test).toBeDefined();
+			const testValue = healthcheck?.test;
+			const serialized = Array.isArray(testValue)
+				? testValue.map(String).join(" ")
+				: String(testValue ?? "");
+			// Must be a real probe, not a no-op success command.
+			expect(serialized).not.toMatch(/\btrue\b/);
+			expect(serialized.length).toBeGreaterThan(0);
+		}
+	});
+
+	test("worker healthcheck probes an internal live endpoint without publishing ports", () => {
+		const services = getServices(readCompose());
+		const worker = services.worker as Record<string, unknown>;
+		const healthcheck = worker.healthcheck as Record<string, unknown> | undefined;
+		expect(healthcheck).toBeDefined();
+		const testValue = healthcheck?.test;
+		const serialized = Array.isArray(testValue)
+			? testValue.map(String).join(" ")
+			: String(testValue ?? "");
+		expect(serialized).toMatch(/health|live|ready/i);
+		// Worker remains unexposed to the host.
+		expect(worker.ports).toBeUndefined();
+		// Entrypoint must serve the probe used by Compose.
+		const workerMain = readFile("apps/worker/src/main.ts");
+		const healthModule = readFile("apps/worker/src/health/worker-health-server.ts");
+		expect(workerMain).toMatch(/createWorkerHealthServer/);
+		expect(workerMain).toMatch(/healthPort|health\/live|healthServer/);
+		expect(healthModule).toMatch(/Bun\.serve|serve\(/);
+		expect(healthModule).toMatch(/\/health\/live/);
+	});
+
+	test("migrate is a one-shot service and dependents wait for successful completion", () => {
+		const services = getServices(readCompose());
+		const migrate = services.migrate as Record<string, unknown> | undefined;
+		expect(migrate).toBeDefined();
+		expect(migrate?.restart === "no" || migrate?.restart === false).toBe(true);
+		const migrateDepends = migrate?.depends_on as
+			| Record<string, { condition?: string }>
+			| undefined;
+		expect(migrateDepends?.postgres?.condition).toBe("service_healthy");
+		for (const name of ["api", "worker"] as const) {
+			const dependencies = services[name]?.depends_on as Record<string, { condition?: string }>;
+			expect(dependencies.postgres?.condition).toBe("service_healthy");
+			expect(dependencies.migrate?.condition).toBe("service_completed_successfully");
+		}
+		const webDepends = services.web?.depends_on as Record<string, { condition?: string }>;
+		expect(webDepends.api?.condition).toBe("service_healthy");
+	});
+
+	test("required secrets use mandatory Compose interpolation and stay out of images", () => {
+		const raw = readFile("compose.yaml");
+		for (const key of [
+			"POSTGRES_PASSWORD",
+			"SESSION_SECRET",
+			"ADMIN_BOOTSTRAP_PASSWORD",
+			"AUTOPILOTAGENT_MOUNT",
+		] as const) {
+			expect(raw).toMatch(new RegExp(`\\$\\{${key}:\\?`));
+		}
+		// Worker must receive the same required authentication secrets as the API.
+		const services = getServices(readCompose());
+		const workerEnv = services.worker?.environment as Record<string, string> | undefined;
+		expect(workerEnv?.SESSION_SECRET).toMatch(/\$\{SESSION_SECRET:\?/);
+		expect(workerEnv?.ADMIN_BOOTSTRAP_PASSWORD).toMatch(/\$\{ADMIN_BOOTSTRAP_PASSWORD:\?/);
+		expect(workerEnv?.AGENT_BIN).toMatch(/AGENT_BIN/);
+		expect(workerEnv?.DIAGNOSTIC_LOG_DIR).toMatch(/\/app\/logs|DIAGNOSTIC_LOG_DIR/);
+		for (const path of ["apps/api/Dockerfile", "apps/worker/Dockerfile", "apps/web/Dockerfile"]) {
+			const content = readFile(path);
+			expect(content).not.toMatch(/POSTGRES_PASSWORD\s*=\s*\S+/);
+			expect(content).not.toMatch(/SESSION_SECRET\s*=\s*\S+/);
+		}
+	});
+
+	test("only the worker receives a writable allowlisted project mount", () => {
+		const services = getServices(readCompose());
+		const workerVolumes = (services.worker?.volumes ?? []) as Array<
+			string | Record<string, unknown>
+		>;
+		const apiVolumes = (services.api?.volumes ?? []) as Array<string | Record<string, unknown>>;
+		const webVolumes = (services.web?.volumes ?? []) as Array<string | Record<string, unknown>>;
+
+		const workerWritableProjects = workerVolumes.some((volume) => {
+			if (typeof volume === "string") {
+				return (
+					(volume.includes("/projects") || volume.includes("WORKSPACE_MOUNT")) &&
+					!volume.includes(":ro")
+				);
+			}
+			const target = String((volume as Record<string, unknown>).target ?? "");
+			const readOnly = (volume as Record<string, unknown>).read_only as boolean | undefined;
+			return target.includes("/projects") && readOnly !== true;
+		});
+		expect(workerWritableProjects).toBe(true);
+
+		const apiWritableProjects = apiVolumes.some((volume) => {
+			if (typeof volume === "string") {
+				return (
+					(volume.includes("/projects") || volume.includes("WORKSPACE_MOUNT")) &&
+					!volume.includes(":ro")
+				);
+			}
+			const target = String((volume as Record<string, unknown>).target ?? "");
+			const readOnly = (volume as Record<string, unknown>).read_only as boolean | undefined;
+			return target.includes("/projects") && readOnly !== true;
+		});
+		expect(apiWritableProjects).toBe(false);
+
+		const webHasProjectMount = webVolumes.some((volume) => {
+			if (typeof volume === "string") {
+				return volume.includes("/projects") || volume.includes("WORKSPACE_MOUNT");
+			}
+			const target = String((volume as Record<string, unknown>).target ?? "");
+			return target.includes("/projects");
+		});
+		expect(webHasProjectMount).toBe(false);
+
+		// Worker keeps durable diagnostics and a read-only Autopilotagent tool mount.
+		const workerSerialized = workerVolumes.map(String).join("\n");
+		expect(workerSerialized).toMatch(/diagnostic-logs|\/app\/logs/);
+		expect(workerSerialized).toMatch(/AUTOPILOTAGENT_MOUNT.*:ro|\/opt\/autopilotagent:ro/);
+	});
+
+	test("worker image and startup validate git, jq, gh, agent CLI, and autopilotagent", () => {
+		const dockerfile = readFile("apps/worker/Dockerfile");
+		const compose = readFile("compose.yaml");
+		const workerMain = readFile("apps/worker/src/main.ts");
+		expect(dockerfile).toMatch(/\bgit\b/);
+		expect(dockerfile).toMatch(/\bjq\b/);
+		expect(dockerfile).toMatch(/\bgh\b/);
+		expect(dockerfile).toMatch(/git --version && jq --version && gh --version/);
+		expect(compose).toMatch(/\$\{AUTOPILOTAGENT_MOUNT:\?[^}]+\}:\/opt\/autopilotagent:ro/);
+		expect(compose).toMatch(/AUTOPILOTAGENT_BIN:.*\/opt\/autopilotagent\/run\.sh/);
+		expect(compose).toMatch(/AGENT_BIN:/);
+		expect(workerMain).toMatch(/validateAgentCli/);
+		expect(workerMain).toMatch(/validateRuntime\(\)/);
+		expect(workerMain).toMatch(/AGENT_BIN/);
 	});
 });
 
@@ -219,7 +415,7 @@ describe("persistent volumes", () => {
 		const compose = readCompose();
 		const volumes = getVolumes(compose);
 		expect(volumes).toBeDefined();
-		const volumeNames = Object.keys(volumes!);
+		const volumeNames = Object.keys(volumes ?? {});
 		const hasPgVolume = volumeNames.some(
 			(name) => name.toLowerCase().includes("postgres") || name.toLowerCase().includes("db"),
 		);
@@ -244,7 +440,7 @@ describe("persistent volumes", () => {
 		const compose = readCompose();
 		const volumes = getVolumes(compose);
 		expect(volumes).toBeDefined();
-		const volumeNames = Object.keys(volumes!);
+		const volumeNames = Object.keys(volumes ?? {});
 		const hasDiagVolume = volumeNames.some(
 			(name) =>
 				name.toLowerCase().includes("diag") ||
@@ -346,6 +542,20 @@ describe("secret and credential handling", () => {
 // ---------------------------------------------------------------------------
 
 describe("dockerfiles", () => {
+	test("docker build context keeps required Bun and TypeScript configuration", () => {
+		const ignored = readFile(".dockerignore")
+			.split(/\r?\n/)
+			.map((line) => line.trim());
+		expect(ignored).not.toContain("bunfig.toml");
+		expect(ignored).not.toContain("tsconfig.base.json");
+	});
+
+	test("Dockerfiles use Bun 1.3-compatible install flags", () => {
+		for (const path of ["apps/api/Dockerfile", "apps/worker/Dockerfile", "apps/web/Dockerfile"]) {
+			expect(readFile(path)).not.toContain("--production=false");
+		}
+	});
+
 	test("apps/web/Dockerfile exists", () => {
 		expect(fileExists("apps/web/Dockerfile")).toBe(true);
 	});
@@ -399,13 +609,17 @@ describe("dockerfiles", () => {
 		}
 	});
 
-	test("worker Dockerfile validates or installs autopilotagent, git, jq, and gh", () => {
-		const content = readFile("apps/worker/Dockerfile");
-		expect(content).toMatch(/git/);
-		expect(content).toMatch(/jq/);
-		expect(content).toMatch(/gh\b/);
-		// Worker must have autopilotagent available (via PATH, COPY, or validation)
-		expect(content).toMatch(/autopilot/i);
+	test("worker tools are installed while autopilotagent is mounted and runtime-validated", () => {
+		const dockerfile = readFile("apps/worker/Dockerfile");
+		const compose = readFile("compose.yaml");
+		const workerMain = readFile("apps/worker/src/main.ts");
+		expect(dockerfile).toMatch(/git/);
+		expect(dockerfile).toMatch(/jq/);
+		expect(dockerfile).toMatch(/gh\b/);
+		expect(dockerfile).not.toMatch(/tooling.*autopilotagent/i);
+		expect(compose).toMatch(/\$\{AUTOPILOTAGENT_MOUNT:\?[^}]+\}:\/opt\/autopilotagent:ro/);
+		expect(compose).toContain("/opt/autopilotagent/run.sh");
+		expect(workerMain).toMatch(/validateRuntime\(\)/);
 	});
 });
 
@@ -420,6 +634,10 @@ describe("structured observability", () => {
 
 	test("packages/shared/src/observability/metrics.ts exists", () => {
 		expect(fileExists("packages/shared/src/observability/metrics.ts")).toBe(true);
+	});
+
+	test("packages/shared/src/observability/diagnostic-retention.ts exists", () => {
+		expect(fileExists("packages/shared/src/observability/diagnostic-retention.ts")).toBe(true);
 	});
 
 	test("structured logger supports correlation, project, feature, and job context", () => {
@@ -441,6 +659,37 @@ describe("structured observability", () => {
 		expect(content).toMatch(/active.?jobs?/i);
 		expect(content).toMatch(/oldest.?age/i);
 		expect(content).toMatch(/heartbeat/i);
+	});
+
+	test("metrics module covers durations interruptions adapter errors polling lag and attention", () => {
+		const content = readFile("packages/shared/src/observability/metrics.ts");
+		expect(content).toMatch(/duration/i);
+		expect(content).toMatch(/interrupt/i);
+		expect(content).toMatch(/adapter/i);
+		expect(content).toMatch(/polling.?lag/i);
+		expect(content).toMatch(/attention/i);
+	});
+
+	test("API entrypoint wires structured logging and metrics emission", () => {
+		const main = readFile("apps/api/src/main.ts");
+		expect(main).toMatch(/createStructuredLogger/);
+		expect(main).toMatch(/createMetricsCollector/);
+		expect(main).toMatch(/logger\.(info|error)/);
+	});
+
+	test("worker entrypoint wires structured logging metrics agent validation and diagnostic retention", () => {
+		const main = readFile("apps/worker/src/main.ts");
+		expect(main).toMatch(/createStructuredLogger/);
+		expect(main).toMatch(/createMetricsCollector/);
+		expect(main).toMatch(/createDiagnosticLogRetention|DiagnosticLogRetention/);
+		expect(main).toMatch(/AGENT_BIN/);
+		expect(main).toMatch(/validateRuntime\(\)/);
+		expect(main).toMatch(/logger\.(info|error)/);
+	});
+
+	test("shared package exports diagnostic retention helpers", () => {
+		const index = readFile("packages/shared/src/index.ts");
+		expect(index).toMatch(/createDiagnosticLogRetention/);
 	});
 });
 
