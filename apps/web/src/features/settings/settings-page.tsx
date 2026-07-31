@@ -3,10 +3,20 @@ import { isUnauthorized } from "../../api/result";
 import { useSseRestRefresh } from "../../api/use-sse-rest-refresh";
 import { useAuth } from "../../auth/auth-provider";
 import { ViewState } from "../../components/feedback/view-state";
-import { formatLocalDateTime } from "../../time/local-date-time";
+import { LocalDateTime } from "../../time/local-date-time";
 
+/** Production health component status from /api/health (req 22/30). */
+type ComponentStatus = "ok" | "degraded" | "down";
+
+interface HealthComponent {
+	name: string;
+	status: ComponentStatus;
+	detail?: Record<string, unknown>;
+}
+
+/** Redacted readiness report — same contract as createProductionHealthProbes. */
 interface HealthStatus {
-	status: "ok" | "degraded" | "down";
+	status: ComponentStatus;
 	database: HealthComponent;
 	worker: HealthComponent;
 	autopilot: HealthComponent;
@@ -14,17 +24,37 @@ interface HealthStatus {
 	checkedAt: string;
 }
 
-interface HealthComponent {
-	name: string;
-	status: "ok" | "degraded" | "down";
-	detail?: Record<string, unknown>;
-}
-
 type PageState = "loading" | "ready" | "error" | "stale" | "unauthorized";
 
-function detailValue(detail: Record<string, unknown> | undefined, key: string): string {
-	if (!detail || detail[key] === undefined || detail[key] === null) return "unknown";
-	return String(detail[key]);
+/** Accessible status token: text + data-status, never color alone. */
+type AccessibleStatus = "healthy" | "degraded" | "unavailable";
+
+function toAccessibleStatus(status: ComponentStatus | undefined): AccessibleStatus {
+	if (status === "ok") return "healthy";
+	if (status === "degraded") return "degraded";
+	return "unavailable";
+}
+
+function formatMetric(value: unknown): string {
+	if (value === undefined || value === null || value === "") return "unavailable";
+	if (typeof value === "number" && !Number.isFinite(value)) return "unavailable";
+	return String(value);
+}
+
+function StatusValue({ status }: { status: ComponentStatus | undefined }) {
+	const accessible = toAccessibleStatus(status);
+	return <span data-status={accessible}>{accessible}</span>;
+}
+
+function MetricRow({ label, value }: { label: string; value: unknown }) {
+	const text = formatMetric(value);
+	const unavailable = text === "unavailable";
+	return (
+		<>
+			<dt>{label}</dt>
+			<dd>{unavailable ? <span data-status="unavailable">unavailable</span> : text}</dd>
+		</>
+	);
 }
 
 export function SettingsPage() {
@@ -63,14 +93,6 @@ export function SettingsPage() {
 	if (state === "error") return <ViewState state="error" message="Failed to load health status" />;
 
 	const workerDetail = health?.worker?.detail ?? {};
-	const workerCapacity = detailValue(workerDetail, "capacity");
-	const workerHeartbeat = detailValue(workerDetail, "heartbeatAge");
-	const queueDepth = detailValue(workerDetail, "queueDepth");
-	const pollingLagRaw = workerDetail.pollingLagMs;
-	const pollingLag =
-		pollingLagRaw === undefined || pollingLagRaw === null
-			? "unknown"
-			: `${String(pollingLagRaw)}ms`;
 
 	return (
 		<section aria-label="Settings and health">
@@ -83,34 +105,45 @@ export function SettingsPage() {
 
 			<dl>
 				<dt>Database</dt>
-				<dd>{health?.database?.status ?? "unknown"}</dd>
+				<dd>
+					<StatusValue status={health?.database?.status} />
+				</dd>
 
 				<dt>Worker</dt>
-				<dd>{health?.worker?.status ?? "unknown"}</dd>
+				<dd>
+					<StatusValue status={health?.worker?.status} />
+				</dd>
 
-				<dt>Worker Capacity</dt>
-				<dd>{workerCapacity}</dd>
-
-				<dt>Worker Heartbeat</dt>
-				<dd>{workerHeartbeat}</dd>
-
-				<dt>Queue Depth</dt>
-				<dd>{queueDepth}</dd>
-
-				<dt>Polling Lag</dt>
-				<dd>{pollingLag}</dd>
+				<MetricRow label="Worker Capacity" value={workerDetail.capacity} />
+				<MetricRow label="Active Jobs" value={workerDetail.activeJobs} />
+				<MetricRow label="Worker Heartbeat" value={workerDetail.heartbeatAge} />
+				<MetricRow label="Queue Depth" value={workerDetail.queueDepth} />
+				<MetricRow label="Oldest Queued Age" value={workerDetail.oldestQueuedAgeMs} />
+				<MetricRow label="Polling Lag" value={workerDetail.pollingLagMs} />
 
 				<dt>GitHub</dt>
-				<dd>{health?.github?.status ?? "unknown"}</dd>
+				<dd>
+					<StatusValue status={health?.github?.status} />
+				</dd>
 
 				<dt>Autopilot</dt>
-				<dd>{health?.autopilot?.status ?? "unknown"}</dd>
+				<dd>
+					<StatusValue status={health?.autopilot?.status} />
+				</dd>
 
 				<dt>Runtime health</dt>
-				<dd>{health?.status ?? "unknown"}</dd>
+				<dd>
+					<StatusValue status={health?.status} />
+				</dd>
 
 				<dt>Checked at</dt>
-				<dd>{health?.checkedAt ? formatLocalDateTime(health.checkedAt) : "unknown"}</dd>
+				<dd>
+					{health?.checkedAt ? (
+						<LocalDateTime utc={health.checkedAt} showTimezone />
+					) : (
+						"unavailable"
+					)}
+				</dd>
 			</dl>
 
 			{state === "stale" ? <ViewState state="stale" message="Data may be outdated" /> : null}

@@ -129,14 +129,55 @@ function shapeProbe(
 	return { ok, detail: { ...detail } };
 }
 
-function inactiveWorkerDetail(): ProbeResult {
+function inactiveWorkerDetail(metrics?: {
+	queueDepth: number;
+	oldestQueuedAgeMs: number;
+	pollingLagMs: number;
+}): ProbeResult {
 	return shapeProbe(false, {
 		active: false,
 		capacity: 0,
 		activeJobs: 0,
 		availableSlots: 0,
 		lastHeartbeatAt: null,
+		heartbeatAge: null,
+		queueDepth: metrics?.queueDepth ?? 0,
+		oldestQueuedAgeMs: metrics?.oldestQueuedAgeMs ?? 0,
+		pollingLagMs: metrics?.pollingLagMs ?? 0,
 	});
+}
+
+/** Queue depth, oldest queued age, and GitHub polling lag from persisted state. */
+async function loadQueueAndPollingMetrics(
+	sql: ReturnType<typeof createDatabaseClient>["sql"],
+	metricsCollector: ReturnType<typeof createMetricsCollector>,
+): Promise<{ queueDepth: number; oldestQueuedAgeMs: number; pollingLagMs: number }> {
+	const queueRows = await sql`
+		SELECT
+			count(*)::int AS depth,
+			COALESCE(
+				EXTRACT(EPOCH FROM (now() - min(enqueued_at))) * 1000,
+				0
+			)::bigint AS oldest_age
+		FROM development_job_attempts
+		WHERE status = 'QUEUED'
+	`.catch(() => [{ depth: 0, oldest_age: 0 }]);
+	const pollRows = await sql`
+		SELECT
+			COALESCE(
+				EXTRACT(EPOCH FROM (now() - max(last_observed_at))) * 1000,
+				0
+			)::bigint AS lag
+		FROM pull_requests
+		WHERE last_observed_at IS NOT NULL
+	`.catch(() => [{ lag: 0 }]);
+
+	const queueDepth = Number(queueRows[0]?.depth ?? 0);
+	const oldestQueuedAgeMs = Number(queueRows[0]?.oldest_age ?? 0);
+	const pollingLagMs = Number(pollRows[0]?.lag ?? 0);
+	metricsCollector.setQueueDepth(queueDepth, oldestQueuedAgeMs);
+	metricsCollector.setPollingLag(pollingLagMs);
+	return { queueDepth, oldestQueuedAgeMs, pollingLagMs };
 }
 
 function githubDetail(input: {
@@ -177,6 +218,7 @@ export function createProductionHealthProbes(
 			name: "worker",
 			check: async () => {
 				try {
+					const observability = await loadQueueAndPollingMetrics(sql, metricsCollector);
 					const rows = await sql`
 						SELECT worker_id, hostname, capacity, active_jobs, last_heartbeat_at
 						FROM worker_registrations
@@ -187,7 +229,7 @@ export function createProductionHealthProbes(
 					if (!worker) {
 						metricsCollector.setActiveJobs(0, 0);
 						metricsCollector.setHeartbeatAge(Number.POSITIVE_INFINITY);
-						return inactiveWorkerDetail();
+						return inactiveWorkerDetail(observability);
 					}
 					const capacity = Number(worker.capacity);
 					const activeJobs = Number(worker.active_jobs);
@@ -202,6 +244,9 @@ export function createProductionHealthProbes(
 						availableSlots: Math.max(0, capacity - activeJobs),
 						lastHeartbeatAt: lastHeartbeatAt.toISOString(),
 						heartbeatAge,
+						queueDepth: observability.queueDepth,
+						oldestQueuedAgeMs: observability.oldestQueuedAgeMs,
+						pollingLagMs: observability.pollingLagMs,
 					});
 				} catch {
 					metricsCollector.setActiveJobs(0, 0);
