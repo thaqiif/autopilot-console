@@ -1,6 +1,6 @@
 import { access, constants } from "node:fs/promises";
 import { hostname } from "node:os";
-import { CliAutopilotRunner } from "../../../packages/autopilot/src/index";
+import { type AutopilotRunHandle, CliAutopilotRunner } from "../../../packages/autopilot/src/index";
 import {
 	applyCoreMigration,
 	applyWorkflowMigration,
@@ -16,10 +16,20 @@ import {
 	redactSecrets,
 } from "../../../packages/shared/src/index";
 import { createDevelopmentWorker } from "./development/development-worker";
+import { createCancellationController } from "./process/cancellation-controller";
+import { createProcessTreeInspector } from "./process/process-tree";
+import { createRetryService } from "./process/retry-service";
+import { createJobCommandWorker } from "./runtime/job-command-worker";
 import { reconcileOrphansAtWorkerStartup } from "./runtime/startup-reconciliation";
 import { createWorkerRegistrationService } from "./runtime/worker-registration";
 import { createConcurrentDevelopmentWorkerRuntime } from "./runtime/worker-runtime";
 
+export type {
+	JobCommandWorker,
+	JobCommandWorkerOptions,
+	ProcessPendingCancelsResult,
+} from "./runtime/job-command-worker";
+export { createJobCommandWorker } from "./runtime/job-command-worker";
 export { reconcileOrphansAtWorkerStartup } from "./runtime/startup-reconciliation";
 export {
 	createConcurrentDevelopmentWorkerRuntime,
@@ -82,6 +92,32 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 		await reconcileOrphansAtWorkerStartup(database.sql);
 		const queue = createDevelopmentQueue(database.sql, {
 			maxConcurrent: capacity,
+		});
+		const processTree = createProcessTreeInspector();
+		const cancellation = createCancellationController({
+			sql: database.sql,
+			tree: processTree,
+		});
+		// Safe retry uses process-tree identity for liveness, not request-scoped probes.
+		const retry = createRetryService({
+			sql: database.sql,
+			autopilot: {
+				async isAlive(handle: AutopilotRunHandle) {
+					return processTree.verifyIdentity(
+						handle.processIdentity.pid,
+						handle.processIdentity.startTimeMs,
+					);
+				},
+			} as never,
+		});
+		const jobCommands = createJobCommandWorker({
+			sql: database.sql,
+			workerId,
+			workerRegistrationId: registration.id,
+			cancellation,
+			retry,
+			tree: processTree,
+			reconcileOrphans: () => reconcileOrphansAtWorkerStartup(database.sql),
 		});
 		const worker = createDevelopmentWorker({
 			sql: database.sql,
@@ -157,8 +193,9 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 			}
 		})();
 
-		await supervisor.run(signal);
-		await background.catch(() => undefined);
+		// Drain durable cancel commands owned by this worker concurrently with development slots.
+		const commandLoop = jobCommands.run(signal);
+		await Promise.all([supervisor.run(signal), commandLoop, background.catch(() => undefined)]);
 
 		await database.sql`
 			UPDATE worker_registrations SET stopped_at = now(), active_jobs = 0

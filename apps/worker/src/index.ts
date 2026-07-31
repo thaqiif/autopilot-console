@@ -62,6 +62,14 @@ export {
 	type RetryServiceOptions,
 } from "./process/retry-service";
 export {
+	createJobCommandWorker,
+	type JobCommandCancelOutcome,
+	type JobCommandWorker,
+	type JobCommandWorkerOptions,
+	type ProcessPendingCancelsResult,
+} from "./runtime/job-command-worker";
+export { reconcileOrphansAtWorkerStartup } from "./runtime/startup-reconciliation";
+export {
 	createWorkerRegistrationService,
 	type WorkerRegistrationService,
 	type WorkerRegistrationServiceOptions,

@@ -3,7 +3,6 @@ import type {
 	DevelopmentAttemptRow,
 	FeatureRow,
 	Queryable,
-	TransactionSql,
 } from "../../../../packages/database/src/index";
 import {
 	appendActivityEvent,
@@ -60,6 +59,8 @@ export interface CancellationControllerOptions {
 	graceMs?: number;
 	killGraceMs?: number;
 	now?: () => Date;
+	/** Injectable delay for tests. Defaults to setTimeout-based delay. */
+	sleep?: (ms: number) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -74,6 +75,7 @@ export function createCancellationController(
 	const graceMs = options.graceMs ?? 5_000;
 	const killGraceMs = options.killGraceMs ?? 2_500;
 	const now = options.now ?? (() => new Date());
+	const sleep = options.sleep ?? delay;
 
 	return { cancelQueued, cancelRunning };
 
@@ -135,11 +137,13 @@ export function createCancellationController(
 			return { kind: "idempotent", attemptId: attempt.id };
 		}
 
-		if (attempt.status !== "RUNNING") {
+		// Durable API requests leave RUNNING as CANCEL_REQUESTED; the owning worker
+		// then escalates process control for either status.
+		if (attempt.status !== "RUNNING" && attempt.status !== "CANCEL_REQUESTED") {
 			return {
 				kind: "blocked",
 				attemptId: attempt.id,
-				reason: "Only RUNNING attempts can be cancelled.",
+				reason: "Only RUNNING or CANCEL_REQUESTED attempts can be process-cancelled.",
 			};
 		}
 
@@ -188,7 +192,7 @@ export function createCancellationController(
 		await tree.signal(handle.processIdentity.pid, "graceful");
 
 		// Wait grace period
-		await delay(graceMs);
+		await sleep(graceMs);
 
 		// Check if still alive
 		const stillAlive = await tree.verifyIdentity(
@@ -212,7 +216,7 @@ export function createCancellationController(
 				/* best-effort */
 			}
 
-			await delay(killGraceMs);
+			await sleep(killGraceMs);
 
 			const stillAliveAfterTerm = await tree.verifyIdentity(
 				handle.processIdentity.pid,
@@ -241,7 +245,7 @@ export function createCancellationController(
 			feature,
 			targetState: "DEVELOPMENT_CANCELLED",
 			attemptStatus: "CANCELLED",
-			owner: "human",
+			owner: "human_and_process_control",
 			cause: reason,
 			operationId,
 			action: "development.cancel",
