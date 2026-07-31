@@ -15,7 +15,6 @@ import {
 	createMetricsCollector,
 	createStructuredLogger,
 	loadRuntimeConfig,
-	PRODUCTION_DIAGNOSTIC_LIMITS,
 	type RuntimeMetricEvent,
 	redactSecrets,
 } from "../../../packages/shared/src/index";
@@ -87,11 +86,8 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 	const workerId = process.env.WORKER_ID?.trim() || `${hostname()}-${process.pid}`;
 	const capacity = config.worker.maxConcurrentJobs;
 	const diagnostics = createDiagnosticLogRetention({
+		// Defaults match PRODUCTION_DIAGNOSTIC_LIMITS (64 KiB / 512 KiB / 32 MiB / 7d).
 		rootDir: process.env.DIAGNOSTIC_LOG_DIR?.trim() || "/app/logs",
-		maxFileBytes: PRODUCTION_DIAGNOSTIC_LIMITS.maxFileBytes,
-		maxPerAttemptBytes: PRODUCTION_DIAGNOSTIC_LIMITS.maxPerAttemptBytes,
-		maxTotalBytes: PRODUCTION_DIAGNOSTIC_LIMITS.maxTotalBytes,
-		maxAgeMs: PRODUCTION_DIAGNOSTIC_LIMITS.maxAgeMs,
 	});
 	try {
 		await applyCoreMigration(database.sql);
@@ -169,8 +165,8 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 			idlePollMs: IDLE_POLL_MS,
 			heartbeat: async (activeJobs) => {
 				await registrationService.heartbeat(registration.id, activeJobs);
+				// Age is 0 at the moment of a successful heartbeat write.
 				onMetric({ type: "heartbeat_age", ageMs: 0 });
-				onMetric({ type: "active_jobs", count: activeJobs, maxConcurrent: capacity });
 			},
 			onActiveJobsChange: (activeJobs) => {
 				onMetric({ type: "active_jobs", count: activeJobs, maxConcurrent: capacity });
@@ -197,36 +193,33 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 			while (!signal.aborted) {
 				const now = Date.now();
 				if (now - lastMetricsEmit >= METRICS_EMIT_MS) {
-					const queueStats = await database.sql`
-						SELECT
-							count(*)::int AS depth,
-							COALESCE(
-								EXTRACT(EPOCH FROM (now() - min(created_at))) * 1000,
-								0
-							)::bigint AS oldest_age
-						FROM development_job_attempts
-						WHERE status = 'QUEUED'
-					`.catch(() => [{ depth: 0, oldest_age: 0 }]);
-					const depth = Number(queueStats[0]?.depth ?? 0);
-					const oldestAge = Number(queueStats[0]?.oldest_age ?? 0);
-					onMetric({ type: "queue", depth, oldestAgeMs: oldestAge });
-
-					const attentionStats = await database.sql`
-						SELECT
-							count(*)::int AS pending,
-							count(*) FILTER (
-								WHERE state IN (
-									'DEVELOPMENT_FAILED',
-									'DEVELOPMENT_INTERRUPTED',
-									'PR_CREATION_FAILED',
-									'CI_FAILED',
-									'BLOCKED'
-								)
-							)::int AS urgent
-						FROM features
-						WHERE archived_at IS NULL
-							AND (
-								state IN (
+					const [queueStats, attentionStats] = await Promise.all([
+						database.sql`
+							SELECT
+								count(*)::int AS depth,
+								COALESCE(
+									EXTRACT(EPOCH FROM (now() - min(created_at))) * 1000,
+									0
+								)::bigint AS oldest_age
+							FROM development_job_attempts
+							WHERE status = 'QUEUED'
+						`.catch(() => [{ depth: 0, oldest_age: 0 }]),
+						// Lifecycle attention states mirror packages/domain attention-policy.
+						database.sql`
+							SELECT
+								count(*)::int AS pending,
+								count(*) FILTER (
+									WHERE state IN (
+										'DEVELOPMENT_FAILED',
+										'DEVELOPMENT_INTERRUPTED',
+										'PR_CREATION_FAILED',
+										'CI_FAILED',
+										'BLOCKED'
+									)
+								)::int AS urgent
+							FROM features
+							WHERE archived_at IS NULL
+								AND state IN (
 									'TASKS_REVIEW',
 									'DEVELOPMENT_FAILED',
 									'DEVELOPMENT_INTERRUPTED',
@@ -236,8 +229,13 @@ export async function runWorker(signal: AbortSignal): Promise<void> {
 									'PR_CHANGES_REQUESTED',
 									'BLOCKED'
 								)
-							)
-					`.catch(() => [{ pending: 0, urgent: 0 }]);
+						`.catch(() => [{ pending: 0, urgent: 0 }]),
+					]);
+					onMetric({
+						type: "queue",
+						depth: Number(queueStats[0]?.depth ?? 0),
+						oldestAgeMs: Number(queueStats[0]?.oldest_age ?? 0),
+					});
 					onMetric({
 						type: "attention",
 						pending: Number(attentionStats[0]?.pending ?? 0),

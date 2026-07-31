@@ -10,7 +10,21 @@
 import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { redactSecrets } from "../security/redaction";
-import { PRODUCTION_DIAGNOSTIC_LIMITS } from "./runtime-metrics";
+
+/**
+ * Documented diagnostic retention defaults used by production workers and ops docs.
+ * Tests and operators rely on these exact numbers remaining stable.
+ */
+export const PRODUCTION_DIAGNOSTIC_LIMITS = {
+	/** Soft cap for a single diagnostic file body (bytes, UTF-8). */
+	maxFileBytes: 64 * 1024,
+	/** Hard cap for cumulative diagnostic bytes for one attempt. */
+	maxPerAttemptBytes: 512 * 1024,
+	/** Hard cap for total diagnostic volume under the retention root. */
+	maxTotalBytes: 32 * 1024 * 1024,
+	/** Age after which diagnostic files are pruned (7 days). */
+	maxAgeMs: 7 * 24 * 60 * 60 * 1000,
+} as const;
 
 export interface DiagnosticFs {
 	mkdir(path: string, options?: { recursive?: boolean }): Promise<unknown>;
@@ -141,7 +155,7 @@ export function createDiagnosticLogRetention(
 			} else {
 				const bounded = boundBody(input.body, fileBudget);
 				bodyText = bounded.body;
-				truncated = bounded.truncated || Buffer.byteLength(input.body, "utf8") > fileBudget;
+				truncated = bounded.truncated;
 			}
 
 			const payloadObject = {
@@ -164,13 +178,21 @@ export function createDiagnosticLogRetention(
 			const cutoff = now().getTime() - maxAgeMs;
 			let removed = 0;
 			const keep: typeof entries = [];
+			const liveAttempts = new Set<string>();
 			for (const entry of entries) {
 				if (entry.mtimeMs < cutoff) {
 					await unlinkFn(entry.path);
 					removed += 1;
 					continue;
 				}
+				// Filename: {stamp}_{attempt}_{stream}_{seq}.log
+				const attemptKey = entry.name.split("_")[1];
+				if (attemptKey) liveAttempts.add(attemptKey);
 				keep.push(entry);
+			}
+			// Drop per-attempt counters for attempts whose files were pruned.
+			for (const key of attemptBytes.keys()) {
+				if (!liveAttempts.has(key)) attemptBytes.delete(key);
 			}
 			keep.sort((a, b) => a.mtimeMs - b.mtimeMs);
 			let remainingBytes = keep.reduce((sum, entry) => sum + entry.size, 0);

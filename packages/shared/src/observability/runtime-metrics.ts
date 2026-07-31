@@ -20,6 +20,15 @@ export type RuntimeMetricEvent =
 	| { type: "attention"; pending: number; urgent: number };
 
 /**
+ * Classify a failure message as a git vs github adapter error for metrics.
+ * Prefer typed failure kinds at the call site when available; this is the
+ * shared fallback when only a free-form reason string exists.
+ */
+export function adapterKindFromMessage(message: string): "git" | "github" {
+	return /git|push|fetch|remote/i.test(message) ? "git" : "github";
+}
+
+/**
  * Apply one runtime event to the collector. Pure side-effect on metrics only.
  */
 export function applyRuntimeMetricEvent(
@@ -71,17 +80,5 @@ export function applyRuntimeMetricEvent(
 	}
 }
 
-/**
- * Documented diagnostic retention defaults used by production workers and ops docs.
- * Tests and operators rely on these exact numbers remaining stable.
- */
-export const PRODUCTION_DIAGNOSTIC_LIMITS = {
-	/** Soft cap for a single diagnostic file body (bytes, UTF-8). */
-	maxFileBytes: 64 * 1024,
-	/** Hard cap for cumulative diagnostic bytes for one attempt. */
-	maxPerAttemptBytes: 512 * 1024,
-	/** Hard cap for total diagnostic volume under the retention root. */
-	maxTotalBytes: 32 * 1024 * 1024,
-	/** Age after which diagnostic files are pruned (7 days). */
-	maxAgeMs: 7 * 24 * 60 * 60 * 1000,
-} as const;
+// Re-export retention limits so existing import paths keep working.
+export { PRODUCTION_DIAGNOSTIC_LIMITS } from "./diagnostic-retention";

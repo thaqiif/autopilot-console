@@ -294,11 +294,13 @@ describe("production observability composition", () => {
 			/adapter:\s*["']worker["']|adapter:\s*["']git["']|adapter:\s*["']github["']/,
 		);
 		expect(workerMain).toMatch(/createDiagnosticLogRetention/);
-		expect(workerMain).toMatch(/maxPerAttemptBytes|PRODUCTION_DIAGNOSTIC_LIMITS/);
+		expect(workerMain).toMatch(/applyRuntimeMetricEvent|onMetric/);
 		expect(apiMain).toMatch(/createMetricsCollector/);
 		expect(apiMain).toMatch(/incrementAdapterError\("github"\)/);
 		expect(githubRuntime).toMatch(/polling_lag|onMetric/);
-		expect(githubRuntime).toMatch(/adapter_error|adapter/);
+		expect(githubRuntime).toMatch(/adapter_error|adapterKindFromMessage|adapter/);
 		expect(jobCommands).toMatch(/job_cancel|onMetric/);
+		// Retention defaults stay centralized for docs/contracts.
+		expect(PRODUCTION_DIAGNOSTIC_LIMITS.maxPerAttemptBytes).toBe(512 * 1024);
 	});
 });

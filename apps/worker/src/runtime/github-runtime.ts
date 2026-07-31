@@ -13,7 +13,10 @@ import {
 } from "../../../../packages/database/src/index";
 import type { GitGateway } from "../../../../packages/git/src/index";
 import type { GitHubGateway, RepositoryRef } from "../../../../packages/github/src/index";
-import type { RuntimeMetricEvent } from "../../../../packages/shared/src/index";
+import {
+	adapterKindFromMessage,
+	type RuntimeMetricEvent,
+} from "../../../../packages/shared/src/index";
 import { createPostgresPrHandoffStore } from "../github/pr-handoff-store";
 import {
 	createPRHandoffWorker,
@@ -171,10 +174,10 @@ export function createGithubRuntime(options: GithubRuntimeOptions): GithubRuntim
 		try {
 			const outcome = await handoffWorker.handoff(attemptId);
 			if (outcome.kind === "failed") {
-				const adapter: "git" | "github" = /git|push|fetch|remote/i.test(outcome.reason)
-					? "git"
-					: "github";
-				options.onMetric?.({ type: "adapter_error", kind: adapter });
+				options.onMetric?.({
+					type: "adapter_error",
+					kind: adapterKindFromMessage(outcome.reason),
+				});
 				await failOutboxIntent(sql, {
 					intentId: intent.id,
 					workerId: options.workerId,
@@ -189,8 +192,7 @@ export function createGithubRuntime(options: GithubRuntimeOptions): GithubRuntim
 			return outcome;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "unknown handoff error";
-			const adapter: "git" | "github" = /git|push|fetch|remote/i.test(message) ? "git" : "github";
-			options.onMetric?.({ type: "adapter_error", kind: adapter });
+			options.onMetric?.({ type: "adapter_error", kind: adapterKindFromMessage(message) });
 			await failOutboxIntent(sql, {
 				intentId: intent.id,
 				workerId: options.workerId,
@@ -210,17 +212,13 @@ export function createGithubRuntime(options: GithubRuntimeOptions): GithubRuntim
 				const pollStarted = Date.now();
 				try {
 					await reconciliationWorker.pollAll();
-					options.onMetric?.({
-						type: "polling_lag",
-						lagMs: Math.max(0, Date.now() - pollStarted),
-					});
-				} catch (error) {
+				} catch {
 					options.onMetric?.({ type: "adapter_error", kind: "github" });
+				} finally {
 					options.onMetric?.({
 						type: "polling_lag",
 						lagMs: Math.max(0, Date.now() - pollStarted),
 					});
-					void error;
 				}
 				lastPollAt = wallMs;
 			}

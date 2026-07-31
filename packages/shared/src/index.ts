@@ -93,6 +93,7 @@ export {
 	type DiagnosticRetention,
 	type DiagnosticRetentionOptions,
 	type DiagnosticWriteInput,
+	PRODUCTION_DIAGNOSTIC_LIMITS,
 } from "./observability/diagnostic-retention";
 export {
 	type AdapterMetrics,
@@ -106,8 +107,8 @@ export {
 	type WorkerMetrics,
 } from "./observability/metrics";
 export {
+	adapterKindFromMessage,
 	applyRuntimeMetricEvent,
-	PRODUCTION_DIAGNOSTIC_LIMITS,
 	type RuntimeMetricEvent,
 } from "./observability/runtime-metrics";
 export {
