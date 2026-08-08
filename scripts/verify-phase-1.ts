@@ -604,11 +604,17 @@ export async function runPhase1Qualification(
 	// browser E2E — Playwright (apps/web) + production composition specs under tests/e2e
 	{
 		const t0 = Date.now();
+		const browserEnv = {
+			...env,
+			// Playwright owns this strict port and fails safely if it is unavailable.
+			PLAYWRIGHT_PORT: env.PLAYWRIGHT_PORT ?? "4173",
+			PHASE1_QUALIFICATION: "1",
+		};
 		const playwright = await runCommandGate(
 			"browser",
 			["bun", "run", "--filter", "@autopilot-console/web", "e2e"],
 			spawn,
-			env,
+			browserEnv,
 			root,
 			t0,
 		);
@@ -674,7 +680,8 @@ export async function runPhase1Qualification(
 		if (maybeStop(push(r))) return finish(false);
 	}
 
-	// image — validate Dockerfiles + compose build configuration (fail closed)
+	// image — validate Dockerfiles and materialize every Compose image. Static
+	// graph output is diagnostic only; a missing daemon cannot qualify a release.
 	{
 		const t0 = Date.now();
 		const dockerfiles = ["apps/web/Dockerfile", "apps/api/Dockerfile", "apps/worker/Dockerfile"];
@@ -690,11 +697,7 @@ export async function runPhase1Qualification(
 			if (maybeStop(push(r))) return finish(false);
 		} else {
 			const cenv = composeEnv(env);
-			const check = await spawn(["docker", "compose", "build", "--check"], {
-				cwd: root,
-				env: cenv,
-			});
-			// --check may exit 0 even when the daemon is down; also require bake print targets.
+			// Bake print is daemon-independent and is the authoritative static graph check.
 			const printed = await spawn(["docker", "compose", "build", "--print"], {
 				cwd: root,
 				env: cenv,
@@ -704,9 +707,8 @@ export async function runPhase1Qualification(
 			const missingTargets = requiredTargets.filter(
 				(t) => !new RegExp(`"${t}"\\s*:`).test(printBody) && !printBody.includes(`"${t}"`),
 			);
-			// Prefer a real build when the daemon is reachable.
 			const info = await spawn(["docker", "info"], { cwd: root, env: cenv });
-			let buildOk = check.exitCode === 0 && printed.exitCode === 0 && missingTargets.length === 0;
+			let buildOk = printed.exitCode === 0 && missingTargets.length === 0;
 			let message: string | undefined;
 			if (missingTargets.length > 0) {
 				buildOk = false;
@@ -715,17 +717,25 @@ export async function runPhase1Qualification(
 				buildOk = false;
 				message = `Image gate failed — docker compose build --print exited ${printed.exitCode}: ${tail(printBody)}`;
 			} else if (info.exitCode === 0) {
-				const built = await spawn(["docker", "compose", "build"], { cwd: root, env: cenv });
-				if (built.exitCode !== 0) {
+				// Daemon available: materialize images (also exercises --check semantics).
+				const check = await spawn(["docker", "compose", "build", "--check"], {
+					cwd: root,
+					env: cenv,
+				});
+				if (check.exitCode !== 0) {
 					buildOk = false;
-					message = `Image gate failed — docker compose build exited ${built.exitCode}. ${tail(combined(built))}`;
+					message = `Image gate failed — docker compose build --check exited ${check.exitCode}: ${tail(combined(check))}`;
+				} else {
+					const built = await spawn(["docker", "compose", "build"], { cwd: root, env: cenv });
+					if (built.exitCode !== 0) {
+						buildOk = false;
+						message = `Image gate failed — docker compose build exited ${built.exitCode}. ${tail(combined(built))}`;
+					}
 				}
-			} else if (check.exitCode !== 0) {
+			} else {
 				buildOk = false;
-				message = `Image gate failed — docker compose build --check exited ${check.exitCode}: ${tail(combined(check))}`;
+				message = `Image gate failed — Docker daemon is unavailable; every image must be materialized before Phase 1 qualification. ${tail(combined(info))}`;
 			}
-			// When the daemon is unavailable, static build-graph validation is still required
-			// and must pass; materialization is performed when docker info succeeds.
 			const r: GateRunResult = {
 				name: "image",
 				ok: buildOk,
