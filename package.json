@@ -13,7 +13,7 @@
 		"lint": "biome check .",
 		"coverage": "bun test --coverage",
 		"coverage:critical": "bun run scripts/check-critical-coverage.ts",
-		"build": "bun run --filter '*' build",
+		"build": "bun run --filter '*' --sequential build",
 		"verify:phase-1": "bun run scripts/verify-phase-1.ts"
 	},
 	"devDependencies": {

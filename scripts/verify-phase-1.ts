@@ -94,6 +94,17 @@ const DEFAULT_DATABASE_URL =
 
 const OUTPUT_TAIL = 4_000;
 
+export function qualificationEnvironment(
+	source: Readonly<Record<string, string | undefined>> = process.env,
+): Record<string, string> {
+	const env: Record<string, string> = {};
+	for (const [name, value] of Object.entries(source)) {
+		if (value !== undefined) env[name] = value;
+	}
+	env.DATABASE_URL ??= DEFAULT_DATABASE_URL;
+	return env;
+}
+
 function defaultNow(): Date {
 	return new Date();
 }
@@ -1085,9 +1096,7 @@ async function main(): Promise<void> {
 	const summaryPath = process.env.PHASE1_SUMMARY_PATH;
 	const summary = await runPhase1Qualification({
 		summaryPath,
-		env: {
-			DATABASE_URL: process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
-		},
+		env: qualificationEnvironment(),
 	});
 	const text = formatSummary(summary);
 	console.log(text);
