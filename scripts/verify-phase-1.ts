@@ -408,8 +408,215 @@ function composeEnv(base: Record<string, string>): Record<string, string> {
 		GH_TOKEN: base.GH_TOKEN ?? base.GITHUB_TOKEN ?? "phase1-qualify-token",
 		GITHUB_TOKEN: base.GITHUB_TOKEN ?? base.GH_TOKEN ?? "phase1-qualify-token",
 		AGENT_BIN: base.AGENT_BIN ?? "cmd",
+		COMPOSE_PROJECT_NAME: base.COMPOSE_PROJECT_NAME ?? "autopilot-console-phase1-qualification",
+		POSTGRES_PORT: base.POSTGRES_PORT ?? "55432",
+		API_PORT: base.API_PORT ?? "33000",
+		WEB_PORT: base.WEB_PORT ?? "38080",
 		...base,
 	};
+}
+
+function failedGate(
+	name: "compose" | "deployment-smoke",
+	started: number,
+	message: string,
+	output = "",
+): GateRunResult {
+	return {
+		name,
+		ok: false,
+		durationMs: Date.now() - started,
+		exitCode: 1,
+		message,
+		outputTail: tail(output),
+	};
+}
+
+/**
+ * Qualify an isolated Compose deployment from empty volumes, exercise all live
+ * health endpoints and a PostgreSQL dump/restore, and always remove the stack.
+ */
+export async function runComposeStackQualification(
+	spawn: NonNullable<VerifyOptions["spawn"]>,
+	root: string,
+	baseEnv: Record<string, string>,
+): Promise<{ compose: GateRunResult; deployment: GateRunResult }> {
+	const started = Date.now();
+	const env = composeEnv(baseEnv);
+	const down = ["docker", "compose", "down", "--volumes", "--remove-orphans", "--timeout", "10"];
+	let compose: GateRunResult | undefined;
+	let deployment: GateRunResult | undefined;
+
+	try {
+		const clean = await spawn(down, { cwd: root, env });
+		if (clean.exitCode !== 0) {
+			const output = combined(clean);
+			compose = failedGate(
+				"compose",
+				started,
+				`Compose gate failed — could not reset the isolated qualification stack: ${tail(output)}`,
+				output,
+			);
+			deployment = failedGate(
+				"deployment-smoke",
+				started,
+				"Deployment smoke was not executed because isolated-stack cleanup failed.",
+			);
+			return { compose, deployment };
+		}
+
+		const config = await spawn(["docker", "compose", "config", "-q"], { cwd: root, env });
+		if (config.exitCode !== 0) {
+			const output = combined(config);
+			compose = failedGate(
+				"compose",
+				started,
+				`Compose gate failed — configuration is invalid: ${tail(output)}`,
+				output,
+			);
+			deployment = failedGate(
+				"deployment-smoke",
+				started,
+				"Deployment smoke was not executed because Compose configuration is invalid.",
+			);
+			return { compose, deployment };
+		}
+
+		const up = await spawn(["docker", "compose", "up", "-d", "--wait", "--wait-timeout", "120"], {
+			cwd: root,
+			env,
+		});
+		if (up.exitCode !== 0) {
+			const output = combined(up);
+			compose = failedGate(
+				"compose",
+				started,
+				`Compose gate failed — the fresh stack did not become healthy: ${tail(output)}`,
+				output,
+			);
+			deployment = failedGate(
+				"deployment-smoke",
+				started,
+				"Deployment smoke was not executed because the fresh Compose stack was unhealthy.",
+			);
+			return { compose, deployment };
+		}
+
+		const ps = await spawn(["docker", "compose", "ps", "--all", "--format", "json"], {
+			cwd: root,
+			env,
+		});
+		const psOutput = combined(ps);
+		const requiredServices = ["postgres", "migrate", "api", "worker", "web"];
+		const missing = requiredServices.filter(
+			(service) => !new RegExp(`"Service"\\s*:\\s*"${service}"`).test(psOutput),
+		);
+		if (ps.exitCode !== 0 || missing.length > 0) {
+			compose = failedGate(
+				"compose",
+				started,
+				missing.length > 0
+					? `Compose gate failed — running stack omitted services: ${missing.join(", ")}.`
+					: `Compose gate failed — service inspection failed: ${tail(psOutput)}`,
+				psOutput,
+			);
+			deployment = failedGate(
+				"deployment-smoke",
+				started,
+				"Deployment smoke was not executed because service inspection failed.",
+			);
+			return { compose, deployment };
+		}
+
+		compose = {
+			name: "compose",
+			ok: true,
+			durationMs: Date.now() - started,
+			exitCode: 0,
+			message: "Fresh isolated Compose stack reached healthy state with all required services.",
+			outputTail: tail(psOutput),
+		};
+
+		const probes: string[][] = [
+			[
+				"docker",
+				"compose",
+				"exec",
+				"-T",
+				"api",
+				"bun",
+				"-e",
+				"const r=await fetch('http://127.0.0.1:3000/api/health/live');process.exit(r.ok?0:1)",
+			],
+			[
+				"docker",
+				"compose",
+				"exec",
+				"-T",
+				"worker",
+				"bun",
+				"-e",
+				"const r=await fetch('http://127.0.0.1:3001/health/live');process.exit(r.ok?0:1)",
+			],
+			[
+				"docker",
+				"compose",
+				"exec",
+				"-T",
+				"web",
+				"wget",
+				"-qO-",
+				"http://127.0.0.1:8080/nginx-health",
+			],
+		];
+		for (const probe of probes) {
+			const result = await spawn(probe, { cwd: root, env });
+			if (result.exitCode !== 0) {
+				const output = combined(result);
+				deployment = failedGate(
+					"deployment-smoke",
+					started,
+					`Deployment smoke failed — live health probe failed (${probe.slice(4, 6).join(" ")}): ${tail(output)}`,
+					output,
+				);
+				return { compose, deployment };
+			}
+		}
+
+		const recovery = await spawn(
+			[
+				"docker",
+				"compose",
+				"exec",
+				"-T",
+				"postgres",
+				"sh",
+				"-euc",
+				'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c \'CREATE TABLE phase1_recovery_probe (id integer PRIMARY KEY); INSERT INTO phase1_recovery_probe VALUES (1);\' && pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t phase1_recovery_probe > /tmp/phase1-recovery.sql && psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c \'DROP TABLE phase1_recovery_probe;\' && psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 < /tmp/phase1-recovery.sql && test "$(psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc \'SELECT count(*) FROM phase1_recovery_probe\')" = 1 && psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c \'DROP TABLE phase1_recovery_probe;\' && rm -f /tmp/phase1-recovery.sql',
+			],
+			{ cwd: root, env },
+		);
+		const recoveryOutput = combined(recovery);
+		deployment =
+			recovery.exitCode === 0
+				? {
+						name: "deployment-smoke",
+						ok: true,
+						durationMs: Date.now() - started,
+						exitCode: 0,
+						message: "API, worker, and web health probes plus PostgreSQL dump/restore succeeded.",
+						outputTail: tail(recoveryOutput),
+					}
+				: failedGate(
+						"deployment-smoke",
+						started,
+						`Deployment smoke failed — PostgreSQL backup/recovery probe failed: ${tail(recoveryOutput)}`,
+						recoveryOutput,
+					);
+		return { compose, deployment };
+	} finally {
+		await spawn(down, { cwd: root, env });
+	}
 }
 
 /**
@@ -748,98 +955,13 @@ export async function runPhase1Qualification(
 		}
 	}
 
-	// compose validation
+	// Compose + deployment smoke — use a unique project, empty volumes and the
+	// same live health and recovery commands documented for operators.
 	{
-		const t0 = Date.now();
-		const cenv = composeEnv(env);
-		const result = await spawn(["docker", "compose", "config", "-q"], {
-			cwd: root,
-			env: cenv,
-		});
-		// Also require a full render for inspection.
-		const rendered = await spawn(["docker", "compose", "config"], {
-			cwd: root,
-			env: cenv,
-		});
-		const body = combined(rendered);
-		const requiredServices = ["web", "api", "worker", "postgres", "migrate"];
-		const missingServices = requiredServices.filter(
-			(s) => !new RegExp(`^\\s{2}${s}:`, "m").test(body) && !body.includes(`\n  ${s}:`),
-		);
-		const ok = result.exitCode === 0 && rendered.exitCode === 0 && missingServices.length === 0;
-		const r: GateRunResult = {
-			name: "compose",
-			ok,
-			durationMs: Date.now() - t0,
-			exitCode: ok ? 0 : 1,
-			message: ok
-				? undefined
-				: missingServices.length > 0
-					? `Compose gate failed — missing services: ${missingServices.join(", ")}.`
-					: `Compose gate failed — docker compose config exited ${rendered.exitCode}: ${tail(body)}`,
-			outputTail: tail(body),
-		};
-		if (maybeStop(push(r))) return finish(false);
-	}
-
-	// deployment smoke — re-run forward migrations (idempotent) and probe schema
-	// without requiring a docker daemon.
-	{
-		const t0 = Date.now();
-		const smoke = await spawn(
-			[
-				"bun",
-				"-e",
-				`
-import { createDatabaseClient } from "./packages/database/src/index.ts";
-import { migrate } from "./packages/database/src/migrate.ts";
-
-const url = process.env.DATABASE_URL;
-if (!url) {
-  console.error("DATABASE_URL is required for deployment-smoke");
-  process.exit(1);
-}
-try {
-  // Re-running forward migrations must be idempotent.
-  await migrate(url);
-  const client = createDatabaseClient(url);
-  try {
-    const tables = await client.sql\`
-      SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename
-    \`;
-    const names = tables.map((r) => String(r.tablename));
-    const required = ["projects", "features", "sessions"];
-    const missing = required.filter((t) => !names.includes(t));
-    if (missing.length) {
-      console.error("deployment-smoke missing tables: " + missing.join(", "));
-      process.exit(1);
-    }
-    console.log("deployment-smoke-ok tables=" + names.length);
-    process.exit(0);
-  } finally {
-    await client.end();
-  }
-} catch (e) {
-  console.error(e instanceof Error ? e.message : String(e));
-  process.exit(1);
-}
-`,
-			],
-			{ cwd: root, env },
-		);
-		const output = combined(smoke);
-		const ok = smoke.exitCode === 0 && /deployment-smoke-ok/.test(output);
-		const r: GateRunResult = {
-			name: "deployment-smoke",
-			ok,
-			durationMs: Date.now() - t0,
-			exitCode: ok ? 0 : smoke.exitCode || 1,
-			message: ok
-				? undefined
-				: `Deployment smoke failed — database schema/health probe unsuccessful: ${tail(output)}`,
-			outputTail: tail(output),
-		};
-		if (maybeStop(push(r))) return finish(false);
+		const stack = await runComposeStackQualification(spawn, root, env);
+		push(stack.compose);
+		push(stack.deployment);
+		if (failFast && (!stack.compose.ok || !stack.deployment.ok)) return finish(false);
 	}
 
 	// Ensure every named gate appears exactly once
