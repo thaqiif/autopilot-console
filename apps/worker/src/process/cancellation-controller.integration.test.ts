@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type {
-	AutopilotRunHandle,
-	AutopilotRunner,
-	SignalKind,
-} from "../../../../packages/autopilot/src/index";
+import type { AutopilotRunHandle, SignalKind } from "../../../../packages/autopilot/src/index";
 import type {
 	DevelopmentAttemptRow,
 	FeatureRow,
@@ -11,18 +7,11 @@ import type {
 	TaskApprovalRow,
 } from "../../../../packages/database/src/index";
 
-// ---------------------------------------------------------------------------
-// Production imports — will fail until implemented (RED phase)
-// ---------------------------------------------------------------------------
 import type {
 	CancellationController,
 	CancelOutcome,
 	ProcessTreeInspector,
 } from "./cancellation-controller";
-
-// Throws at import time — no createCancellationController export yet.
-// Uncomment after implementation:
-// import { createCancellationController } from "./cancellation-controller";
 
 // ---------------------------------------------------------------------------
 // Shared test clock
@@ -327,17 +316,6 @@ class InMemoryCancellationController implements CancellationController {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Fake persistence
-// ---------------------------------------------------------------------------
-
-type FakeCancelStore = InMemoryCancellationController extends infer C
-	? C extends { store: infer S }
-		? S
-		: never
-	: never;
-
-// Unwrap: just define inline
 type CancelPersistence = {
 	cancelledQueued: Array<{ attemptId: string; reason: string }>;
 	cancelRequested: Array<{ attemptId: string; reason: string }>;
@@ -389,7 +367,7 @@ function makeCancelPersistence(): CancelPersistence {
 			(attempt as { status: string }).status = "CANCELLED";
 			idempotencyMap.set(operationKey, { kind: "cancelled", attemptId: attempt.id });
 		},
-		async saveBlocked(attempt, feature, operationKey, reason) {
+		async saveBlocked(attempt, feature, _operationKey, reason) {
 			this.blocked.push({ attemptId: attempt.id, reason });
 			(feature as { state: string }).state = "BLOCKED";
 			(attempt as { status: string }).status = "FAILED";
@@ -401,7 +379,7 @@ function makeCancelPersistence(): CancelPersistence {
 }
 
 function makeController(
-	s: Seed,
+	_s: Seed,
 	options: { graceMs?: number } = {},
 ): { ctrl: CancellationController; tree: FakeProcessTreeInspector; store: CancelPersistence } {
 	const tree = new FakeProcessTreeInspector();

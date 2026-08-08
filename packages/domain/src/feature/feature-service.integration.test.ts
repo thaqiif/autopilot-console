@@ -10,16 +10,14 @@ import {
 	createDatabaseClient,
 	createProject,
 	createWorkspace,
+	DATABASE_URL,
 	type DatabaseClient,
+	resetSchema,
 	type Sql,
 } from "../../../database/src/index";
 import type { ProjectActor } from "../project/project";
 import { createReleaseService, type ReleaseService } from "../release/release-service";
 import { createFeatureService, type FeatureService } from "./feature-service";
-
-const DATABASE_URL =
-	process.env.DATABASE_URL ??
-	"postgres://postgres:postgres@autopilot-console-pg:5432/autopilot_console";
 
 let client: DatabaseClient;
 let sql: Sql;
@@ -46,13 +44,40 @@ function makeFeatureService(sqlOverride: Sql = sql, newId?: () => string): Featu
 	});
 }
 
+/**
+ * Proxy a postgres.js Sql that intercepts tagged-template queries whose text
+ * matches `matchSql`. The real client is a callable template tag, so get-only
+ * proxies on "unsafe"/"query" never fire for INSERT/UPDATE paths.
+ */
+function sqlThrowingOn(base: Sql, matchSql: RegExp, errorFactory: () => Error): Sql {
+	const wrap = (target: Sql): Sql => {
+		const apply = (_t: Sql, _thisArg: unknown, argArray: unknown[]) => {
+			const strings = argArray[0] as TemplateStringsArray | string | undefined;
+			const text = Array.isArray(strings) ? strings.join(" ") : String(strings ?? "");
+			if (matchSql.test(text)) {
+				throw errorFactory();
+			}
+			return Reflect.apply(target as unknown as (...a: unknown[]) => unknown, target, argArray);
+		};
+		return new Proxy(target, {
+			apply,
+			get(t, p, r) {
+				if (p === "begin") {
+					return async (fn: (tx: Sql) => Promise<unknown>) =>
+						(t as Sql).begin(async (tx) => fn(wrap(tx as unknown as Sql)));
+				}
+				const v = Reflect.get(t, p, r);
+				return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+			},
+		}) as unknown as Sql;
+	};
+	return wrap(base);
+}
+
 beforeAll(async () => {
 	client = createDatabaseClient(DATABASE_URL);
 	sql = client.sql;
-	await sql.unsafe("DROP SCHEMA IF EXISTS public CASCADE");
-	await sql.unsafe("CREATE SCHEMA public");
-	await sql.unsafe("GRANT ALL ON SCHEMA public TO postgres");
-	await sql.unsafe("GRANT ALL ON SCHEMA public TO public");
+	await resetSchema(sql);
 	await applyCoreMigration(sql);
 	await applyWorkflowMigration(sql);
 });
@@ -361,42 +386,11 @@ describe("createFeature", () => {
 
 describe("createFeature transactional failures", () => {
 	test("handles cross-project violation from DB during transaction", async () => {
-		// Use a proxy that fakes a cross-project violation in the insert
-		const brokenSql = new Proxy(sql, {
-			get(target, prop, receiver) {
-				const value = Reflect.get(target, prop, receiver);
-				if (prop === "begin") {
-					return async (fn: (tx: Sql) => Promise<unknown>) => {
-						return (target as Sql).begin(async (tx) => {
-							const wrapped = new Proxy(tx, {
-								get(t, p, r) {
-									const v = Reflect.get(t, p, r);
-									if (
-										p === "unsafe" ||
-										(typeof v === "function" && String(p || "").includes("query"))
-									) {
-										return (...args: unknown[]) => {
-											const sqlText = String(args[0] ?? "");
-											if (sqlText.includes("INSERT INTO features")) {
-												const err = new Error(
-													'release "some-id" does not belong to project',
-												) as Error & { code?: string };
-												err.name = "PostgresError";
-												throw err;
-											}
-											return (v as (...a: unknown[]) => unknown).apply(t, args);
-										};
-									}
-									return typeof v === "function" ? v.bind(t) : v;
-								},
-							}) as unknown as Sql;
-							return fn(wrapped);
-						});
-					};
-				}
-				return typeof value === "function" ? value.bind(target) : value;
-			},
-		}) as unknown as Sql;
+		const brokenSql = sqlThrowingOn(sql, /INSERT\s+INTO\s+features/i, () => {
+			const err = new Error('release "some-id" does not belong to project');
+			err.name = "PostgresError";
+			return err;
+		});
 
 		const service = makeFeatureService(brokenSql);
 		const result = await service.createFeature({
@@ -412,42 +406,14 @@ describe("createFeature transactional failures", () => {
 	});
 
 	test("handles unique violation from DB during transaction", async () => {
-		const brokenSql = new Proxy(sql, {
-			get(target, prop, receiver) {
-				const value = Reflect.get(target, prop, receiver);
-				if (prop === "begin") {
-					return async (fn: (tx: Sql) => Promise<unknown>) => {
-						return (target as Sql).begin(async (tx) => {
-							const wrapped = new Proxy(tx, {
-								get(t, p, r) {
-									const v = Reflect.get(t, p, r);
-									if (
-										p === "unsafe" ||
-										(typeof v === "function" && String(p || "").includes("query"))
-									) {
-										return (...args: unknown[]) => {
-											const sqlText = String(args[0] ?? "");
-											if (sqlText.includes("INSERT INTO features")) {
-												const err = new Error(
-													"duplicate key value violates unique constraint",
-												) as Error & { code?: string };
-												err.name = "PostgresError";
-												(err as unknown as Record<string, unknown>).code = "23505";
-												throw err;
-											}
-											return (v as (...a: unknown[]) => unknown).apply(t, args);
-										};
-									}
-									return typeof v === "function" ? v.bind(t) : v;
-								},
-							}) as unknown as Sql;
-							return fn(wrapped);
-						});
-					};
-				}
-				return typeof value === "function" ? value.bind(target) : value;
-			},
-		}) as unknown as Sql;
+		const brokenSql = sqlThrowingOn(sql, /INSERT\s+INTO\s+features/i, () => {
+			const err = new Error("duplicate key value violates unique constraint") as Error & {
+				code?: string;
+			};
+			err.name = "PostgresError";
+			err.code = "23505";
+			return err;
+		});
 
 		const service = makeFeatureService(brokenSql);
 		const result = await service.createFeature({
@@ -463,37 +429,11 @@ describe("createFeature transactional failures", () => {
 	});
 
 	test("re-throws non-constraint DB errors during transaction", async () => {
-		const brokenSql = new Proxy(sql, {
-			get(target, prop, receiver) {
-				const value = Reflect.get(target, prop, receiver);
-				if (prop === "begin") {
-					return async (fn: (tx: Sql) => Promise<unknown>) => {
-						return (target as Sql).begin(async (tx) => {
-							const wrapped = new Proxy(tx, {
-								get(t, p, r) {
-									const v = Reflect.get(t, p, r);
-									if (
-										p === "unsafe" ||
-										(typeof v === "function" && String(p || "").includes("query"))
-									) {
-										return (...args: unknown[]) => {
-											const sqlText = String(args[0] ?? "");
-											if (sqlText.includes("INSERT INTO features")) {
-												throw new Error("some random DB error");
-											}
-											return (v as (...a: unknown[]) => unknown).apply(t, args);
-										};
-									}
-									return typeof v === "function" ? v.bind(t) : v;
-								},
-							}) as unknown as Sql;
-							return fn(wrapped);
-						});
-					};
-				}
-				return typeof value === "function" ? value.bind(target) : value;
-			},
-		}) as unknown as Sql;
+		const brokenSql = sqlThrowingOn(
+			sql,
+			/INSERT\s+INTO\s+features/i,
+			() => new Error("some random DB error"),
+		);
 
 		const service = makeFeatureService(brokenSql);
 		await expect(
@@ -749,42 +689,14 @@ describe("updateFeature", () => {
 		});
 		if (!created.ok) throw new Error("create failed");
 
-		const brokenSql = new Proxy(sql, {
-			get(target, prop, receiver) {
-				const value = Reflect.get(target, prop, receiver);
-				if (prop === "begin") {
-					return async (fn: (tx: Sql) => Promise<unknown>) => {
-						return (target as Sql).begin(async (tx) => {
-							const wrapped = new Proxy(tx, {
-								get(t, p, r) {
-									const v = Reflect.get(t, p, r);
-									if (
-										p === "unsafe" ||
-										(typeof v === "function" && String(p || "").includes("query"))
-									) {
-										return (...args: unknown[]) => {
-											const sqlText = String(args[0] ?? "");
-											if (sqlText.includes("UPDATE features")) {
-												const err = new Error(
-													"duplicate key value violates unique constraint",
-												) as Error & { code?: string };
-												err.name = "PostgresError";
-												(err as unknown as Record<string, unknown>).code = "23505";
-												throw err;
-											}
-											return (v as (...a: unknown[]) => unknown).apply(t, args);
-										};
-									}
-									return typeof v === "function" ? v.bind(t) : v;
-								},
-							}) as unknown as Sql;
-							return fn(wrapped);
-						});
-					};
-				}
-				return typeof value === "function" ? value.bind(target) : value;
-			},
-		}) as unknown as Sql;
+		const brokenSql = sqlThrowingOn(sql, /UPDATE\s+features/i, () => {
+			const err = new Error("duplicate key value violates unique constraint") as Error & {
+				code?: string;
+			};
+			err.name = "PostgresError";
+			err.code = "23505";
+			return err;
+		});
 
 		const brokenService = makeFeatureService(brokenSql);
 		const result = await brokenService.updateFeature({
@@ -808,37 +720,11 @@ describe("updateFeature", () => {
 		});
 		if (!created.ok) throw new Error("create failed");
 
-		const brokenSql = new Proxy(sql, {
-			get(target, prop, receiver) {
-				const value = Reflect.get(target, prop, receiver);
-				if (prop === "begin") {
-					return async (fn: (tx: Sql) => Promise<unknown>) => {
-						return (target as Sql).begin(async (tx) => {
-							const wrapped = new Proxy(tx, {
-								get(t, p, r) {
-									const v = Reflect.get(t, p, r);
-									if (
-										p === "unsafe" ||
-										(typeof v === "function" && String(p || "").includes("query"))
-									) {
-										return (...args: unknown[]) => {
-											const sqlText = String(args[0] ?? "");
-											if (sqlText.includes("UPDATE features")) {
-												throw new Error("random update error");
-											}
-											return (v as (...a: unknown[]) => unknown).apply(t, args);
-										};
-									}
-									return typeof v === "function" ? v.bind(t) : v;
-								},
-							}) as unknown as Sql;
-							return fn(wrapped);
-						});
-					};
-				}
-				return typeof value === "function" ? value.bind(target) : value;
-			},
-		}) as unknown as Sql;
+		const brokenSql = sqlThrowingOn(
+			sql,
+			/UPDATE\s+features/i,
+			() => new Error("random update error"),
+		);
 
 		const brokenService = makeFeatureService(brokenSql);
 		await expect(

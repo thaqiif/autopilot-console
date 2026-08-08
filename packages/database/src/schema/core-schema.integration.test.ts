@@ -16,10 +16,7 @@ import {
 } from "../repositories/core-repositories";
 import { applyCoreMigration, rollbackCoreMigration } from "../schema/core-migration";
 import { createDatabaseFixture, type DatabaseFixture } from "../testing/database-fixture";
-
-const DATABASE_URL =
-	process.env.DATABASE_URL ??
-	"postgres://postgres:postgres@autopilot-console-pg:5432/autopilot_console";
+import { DATABASE_URL, mustReject, resetSchema } from "../testing/test-helpers";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const migrationsDir = join(packageRoot, "migrations");
@@ -28,23 +25,10 @@ let client: DatabaseClient;
 let sql: Sql;
 let fixture: DatabaseFixture;
 
-/** Assert promise rejects without relying on expect().rejects (postgres errors). */
-async function mustReject(run: () => Promise<unknown>): Promise<Error> {
-	try {
-		await run();
-	} catch (error) {
-		return error as Error;
-	}
-	throw new Error("expected operation to reject");
-}
-
 beforeAll(async () => {
 	client = createDatabaseClient(DATABASE_URL);
 	sql = client.sql;
-	await sql.unsafe("DROP SCHEMA IF EXISTS public CASCADE");
-	await sql.unsafe("CREATE SCHEMA public");
-	await sql.unsafe("GRANT ALL ON SCHEMA public TO postgres");
-	await sql.unsafe("GRANT ALL ON SCHEMA public TO public");
+	await resetSchema(sql);
 	await applyCoreMigration(sql);
 });
 
