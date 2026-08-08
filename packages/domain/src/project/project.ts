@@ -25,5 +25,6 @@ export interface Project {
 export interface ProjectActor {
 	actorType: "administrator" | "api_system" | "worker" | "reconciliation";
 	actorId: string;
+	actorDisplay?: string;
 	correlationId?: string;
 }
