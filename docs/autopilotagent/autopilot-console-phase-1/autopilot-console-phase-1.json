@@ -1989,22 +1989,22 @@
         "test": {
           "description": "Add a production-contract test that feeds the real health payload to Settings and asserts every required value, degraded state, and REST refresh.",
           "file": "apps/web/src/features/overview/overview-page.test.tsx",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Add missing production health/metrics fields and align Settings with the shared typed contract.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Remove fixture-only health field assumptions and share status formatting with Overview.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
         "Render Settings from the production health response, not a hand-written superset fixture.",
         "Verify queue depth and polling lag change when the underlying persisted/runtime measurements change."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "31",
@@ -2289,15 +2289,15 @@
         "test": {
           "description": "Create a route/state matrix test covering all five feedback states, local-time rendering, non-color status, 375x667 overflow, responsive tables, and mobile logs for every data page.",
           "file": "apps/web/e2e/mobile-accessibility.spec.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Fill page-level feedback, local-time, status-semantic, and responsive-layout gaps using shared components.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Replace remaining page-specific state and timestamp formatting with shared primitives.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -2305,7 +2305,7 @@
         "Run timezone tests with UTC, negative, and positive offsets.",
         "Measure document scroll width on every core narrow-screen route."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "36",
@@ -2572,10 +2572,12 @@
         "Build every image and start the complete stack from empty volumes.",
         "Inspect mounts and environment inside each service and run every health check."
       ],
-      "passes": true
-    },
-    {
-      "id": "40",
+	      "passes": false,
+	      "stuck": true,
+	      "blockedReason": "Implementation and fail-closed orchestration are complete, but this environment has no reachable Docker daemon, so images and a fresh-volume Compose stack cannot be executed."
+	    },
+	    {
+	      "id": "40",
       "category": "integration",
       "description": "Wire production observability and provide operator documentation that matches the actual runtime.",
       "dependsOn": [
@@ -2624,29 +2626,31 @@
         "Operations docs cover backup, restore, cancellation/escalation, interruption, retry, GitHub reconciliation, diagnostics, retention, and safe upgrades exactly as production composition behaves."
       ],
       "tdd": {
-        "test": {
-          "description": "Add production-composition tests that drive real runtime events and assert every required log/metric/retention value plus documentation contract checks for all operator procedures.",
-          "file": "packages/shared/src/observability/metrics.test.ts",
-          "passes": true
+	        "test": {
+	          "description": "Add production-composition tests that drive real runtime events and assert every required log/metric/retention value plus documentation contract checks for all operator procedures.",
+	          "file": "packages/shared/src/observability/metrics.test.ts",
+	          "passes": true
         },
         "implement": {
           "description": "Update metrics from actual API/worker operations, enrich redacted logs with stable context, and reconcile operator docs with runtime behavior.",
           "passes": true
         },
-        "refactor": {
-          "description": "Centralize instrumentation boundaries and remove documentation claims that cannot be traced to production code.",
-          "passes": true
-        }
+	        "refactor": {
+	          "description": "Centralize instrumentation boundaries and remove documentation claims that cannot be traced to production code.",
+	          "passes": true
+	    }
       },
       "verification": [
         "Run a queued, successful, failed, interrupted, cancelled, Git-error, and GitHub-error flow and inspect metrics/logs.",
         "Force diagnostic limits and confirm bounded storage plus truncation markers.",
         "Execute deployment and recovery documentation against a fresh Compose stack."
       ],
-      "passes": true
-    },
-    {
-      "id": "41",
+	      "passes": false,
+	      "stuck": true,
+	      "blockedReason": "Production observability tests pass, but the required live deployment/recovery execution depends on requirement 39 and cannot run without a Docker daemon."
+	    },
+	    {
+	      "id": "41",
       "category": "integration",
       "description": "Prove the complete owner journey through production-equivalent API and worker composition using fake external executables and adapters.",
       "dependsOn": [
@@ -2695,23 +2699,23 @@
         "test": {
           "description": "Replace fixture-only runDevelopmentOnce/runPrHandoff shortcuts with a production-equivalent supervisor test covering the complete CI and review sequence plus exact state/event/audit assertions.",
           "file": "tests/e2e/phase-1-owner-journey.spec.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Expose dependency-injected production runtime composition for the owner-journey fixture and fill missing lifecycle wiring.",
-          "passes": false
+          "passes": true
         },
-        "refactor": {
-          "description": "Keep external fakes controllable while sharing production command, queue, handoff, polling, and reconciliation code.",
-          "passes": false
-        }
+	        "refactor": {
+	          "description": "Keep external fakes controllable while sharing production command, queue, handoff, polling, and reconciliation code.",
+	          "passes": true
+	    }
       },
       "verification": [
         "Run the owner journey from an empty isolated schema.",
         "Compare final activity and audit sequences with every expected transition and actor.",
         "Repeat the journey to detect state leakage or duplicate external effects."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "42",
@@ -2757,15 +2761,15 @@
         "test": {
           "description": "Rewrite durability tests to dispose/recreate browser, API, and worker components and restart at development, cancellation, push, PR-create, and poll boundaries.",
           "file": "tests/e2e/durability-and-restart.spec.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Add restartable test composition and fix any ownership or persisted-intent gaps exposed by real component replacement.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Centralize bounded state waiters and component lifecycle helpers; remove simulated restart comments and conditional assertions.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -2773,7 +2777,7 @@
         "Repeat every restart boundary and confirm one attempt, process, push, and PR.",
         "Search the suite for conditional success assertions or multi-state allowances."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "43",
@@ -2818,15 +2822,15 @@
         "test": {
           "description": "Replace direct-SQL RUNNING simulation with controllable production worker claims and add the fifth-waits, duplicate-effect, and stale-observation cases.",
           "file": "tests/integration/concurrency-and-idempotency.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Fix runtime supervision, durable operation uniqueness, and monotonic writes exposed by the real concurrency tests.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Use reusable barriers and bounded events for deterministic races without sleeps.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -2834,7 +2838,7 @@
         "Race every idempotent operation and count attempts, intents, activities, audits, pushes, and PRs.",
         "Replay stale versions and observations after newer writes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "44",
@@ -2887,15 +2891,15 @@
         "test": {
           "description": "Rewrite the security matrix with mandatory successful setup, exact status/error codes, no-mutation/effect assertions, and all path/Git/process/PR/session/CSRF/staleness cases.",
           "file": "tests/integration/security-boundaries.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Fix any domain, API, Git, process, or reconciliation boundary exposed by the exact matrix.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Share secure fixture builders and exact error assertions; remove conditional branches and broad not-success assertions.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -2903,7 +2907,7 @@
         "For every rejection, assert database and fake external-effect counts remain unchanged.",
         "Run each security test alone and as part of the full suite."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "45",
@@ -2945,15 +2949,15 @@
         "test": {
           "description": "Make the performance suite self-validating for exact seed cardinality, documented profile, warm-up, sample count, and explicit p95 calculations for both endpoints.",
           "file": "tests/performance/portfolio-reads.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Optimize projections/indexes only where measured p95 exceeds the target.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Keep performance seed and measurement utilities deterministic and separate from functional assertions.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -2961,7 +2965,7 @@
         "Verify exact fixture cardinality before measuring.",
         "Repeat the suite to detect material variance."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "46",
@@ -3012,15 +3016,15 @@
         "test": {
           "description": "Replace presence-only mobile and keyboard checks with completed workflow assertions and add a standards-based axe-compatible WCAG 2.2 AA scan including contrast.",
           "file": "apps/web/e2e/mobile-accessibility.spec.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Fix responsive, focus, keyboard, labeling, contrast, live-region, and tap-target failures found by the complete journeys and scanner.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Share journey fixtures and accessibility assertions without weakening rules or hiding violations.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -3028,7 +3032,7 @@
         "Review the accessibility scanner output for every core route.",
         "Complete each workflow without a mouse and verify focus restoration."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "47",
@@ -3083,15 +3087,15 @@
         "test": {
           "description": "Add missing branch tests for every below-threshold module and a gate self-test proving absent coverage, skipped tests, or an unavailable required fixture fails the command.",
           "file": "scripts/check-critical-coverage.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Complete critical branch tests and make the coverage command execute all required fixtures deterministically.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Keep the critical module manifest centralized and remove redundant tests without reducing behavioral coverage.",
-          "passes": false
+          "passes": true
         }
       },
       "verification": [
@@ -3099,7 +3103,7 @@
         "Temporarily omit one critical suite and confirm the gate fails.",
         "Search critical suites for skip, todo, or conditional execution."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "48",
@@ -3156,23 +3160,25 @@
         "test": {
           "description": "Add a release-gate contract test that verifies the qualification command invokes every named gate and fails when any gate is missing, skipped, unavailable, or failing.",
           "file": "tests/architecture/workspace.test.ts",
-          "passes": false
+          "passes": true
         },
         "implement": {
           "description": "Create the reproducible Phase 1 qualification command, dependency checks, and aligned status documentation.",
-          "passes": false
+          "passes": true
         },
         "refactor": {
           "description": "Reuse workspace scripts without duplicate execution and produce a concise machine-readable gate summary.",
-          "passes": false
+          "passes": true
         }
       },
-      "verification": [
-        "Run the qualification command twice from the documented environment.",
-        "Break each gate one at a time and confirm the command fails closed.",
-        "Compare completion status across the ledger and all operator-facing documents."
-      ],
-      "passes": false
+	      "verification": [
+	        "Run the qualification command twice from the documented environment.",
+	        "Break each gate one at a time and confirm the command fails closed.",
+	        "Compare completion status across the ledger and all operator-facing documents."
+	      ],
+	      "passes": false,
+	      "stuck": true,
+	      "blockedReason": "Every non-Docker gate is implemented, but release qualification must run twice with real image, Compose, and recovery gates; the current environment has no Docker daemon."
     }
   ]
 }

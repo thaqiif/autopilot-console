@@ -7,6 +7,8 @@ and an nginx-served web application.
 
 ## Current status
 
+Phase 1 qualification status: NOT QUALIFIED
+
 Phase 1 is release-qualified when `bun run verify:phase-1` passes twice
 consecutively in a documented environment. That command is the single aggregate
 gate for workspace typecheck, lint, unit tests, database integration, process

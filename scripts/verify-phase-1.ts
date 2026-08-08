@@ -189,6 +189,15 @@ export function assertQualificationScriptContract(root = ROOT): {
 				"Qualification script must document fail-closed / actionable failure behavior.",
 			);
 		}
+		if (!body.includes("./packages/autopilot/src/runner/installed-cli.contract.ts")) {
+			messages.push("Qualification must execute the installed Autopilotagent CLI contract.");
+		}
+	}
+	const installedContract = join(root, "packages/autopilot/src/runner/installed-cli.contract.ts");
+	if (!existsSync(installedContract)) {
+		messages.push("Installed Autopilotagent CLI contract is missing.");
+	} else if (/AUTOPILOT_INSTALLED_CLI_TEST|opt-in/i.test(readFileSync(installedContract, "utf8"))) {
+		messages.push("Installed Autopilotagent CLI contract must not be opt-in during qualification.");
 	}
 
 	return { ok: messages.length === 0, messages, scriptBody };
@@ -225,6 +234,33 @@ export function assertDocumentationAlignment(root = ROOT): {
 	const changelog = existsSync(join(root, "CHANGELOG.md"))
 		? readFileSync(join(root, "CHANGELOG.md"), "utf8")
 		: "";
+	const ledgerPath = join(
+		root,
+		"docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.json",
+	);
+	let ledgerQualified = false;
+	if (existsSync(ledgerPath)) {
+		try {
+			const ledger = JSON.parse(readFileSync(ledgerPath, "utf8")) as {
+				requirements?: Array<{ id?: string; passes?: boolean }>;
+			};
+			ledgerQualified =
+				ledger.requirements?.find((requirement) => requirement.id === "48")?.passes === true;
+		} catch {
+			messages.push("Phase 1 requirement ledger is not valid JSON.");
+		}
+	}
+	const statusMarker = `Phase 1 qualification status: ${ledgerQualified ? "QUALIFIED" : "NOT QUALIFIED"}`;
+	for (const [relativePath, body] of [
+		["README.md", readme],
+		["docs/deployment.md", deployment],
+		["docs/operations.md", operations],
+		["CHANGELOG.md", changelog],
+	] as const) {
+		if (!body.includes(statusMarker)) {
+			messages.push(`${relativePath} must report the ledger status exactly: ${statusMarker}`);
+		}
+	}
 
 	if (!/verify:phase-1|verify-phase-1/i.test(readme)) {
 		messages.push("README.md must document the Phase 1 qualification command (verify:phase-1).");
@@ -305,9 +341,18 @@ async function checkDockerCli(
 	const compose = await spawn(["docker", "compose", "version"]);
 	const composeOut = combined(compose);
 	if (compose.exitCode === 0 || /Docker Compose version/i.test(composeOut)) {
+		const daemon = await spawn(["docker", "info", "--format", "{{.ServerVersion}}"]);
+		if (daemon.exitCode === 0 && daemon.stdout.trim()) {
+			return {
+				ok: true,
+				detail: `${composeOut.split("\n")[0]?.trim() || "docker compose available"}; daemon ${daemon.stdout.trim()}`,
+			};
+		}
 		return {
-			ok: true,
-			detail: composeOut.split("\n")[0]?.trim() || "docker compose available",
+			ok: false,
+			detail:
+				`Docker daemon unavailable: ${combined(daemon) || "docker info failed"}. ` +
+				"Start a Docker daemon before Phase 1 qualification; image and fresh-stack gates cannot be skipped.",
 		};
 	}
 	const version = await spawn(["docker", "version", "--format", "{{.Client.Version}}"]);
@@ -788,7 +833,7 @@ export async function runPhase1Qualification(
 	// process / git / github / api / worker integration surface
 	{
 		const t0 = Date.now();
-		const r = await runCommandGate(
+		const suites = await runCommandGate(
 			"process",
 			[
 				"bun",
@@ -805,7 +850,27 @@ export async function runPhase1Qualification(
 			root,
 			t0,
 		);
-		if (maybeStop(push(r))) return finish(false);
+		if (!suites.ok) {
+			if (maybeStop(push(suites))) return finish(false);
+		} else {
+			const installedCli = await runCommandGate(
+				"process",
+				["bun", "test", "./packages/autopilot/src/runner/installed-cli.contract.ts"],
+				spawn,
+				env,
+				root,
+				t0,
+			);
+			const merged: GateRunResult = {
+				name: "process",
+				ok: suites.ok && installedCli.ok,
+				durationMs: Date.now() - t0,
+				exitCode: installedCli.ok ? suites.exitCode : installedCli.exitCode,
+				message: installedCli.ok ? suites.message : (installedCli.message ?? suites.message),
+				outputTail: [suites.outputTail, installedCli.outputTail].filter(Boolean).join("\n---\n"),
+			};
+			if (maybeStop(push(merged))) return finish(false);
+		}
 	}
 
 	// browser E2E — Playwright (apps/web) + production composition specs under tests/e2e

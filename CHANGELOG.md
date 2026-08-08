@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-08-08
+
+Phase 1 qualification status: NOT QUALIFIED
+
+### Added
+
+- Isolated desktop/mobile Playwright qualification with complete keyboard and WCAG 2.2 AA journeys.
+- Istanbul source instrumentation enforcing at least 90% branch coverage independently for all 19 critical modules.
+- Fresh-volume Compose qualification with live health probes and PostgreSQL dump/restore recovery verification.
+
+### Changed
+
+- Release qualification now requires a live Docker daemon, materializes every image, executes the installed Autopilotagent CLI contract automatically, and fails closed when any dependency is unavailable.
+
 ## 2026-07-31
 
 ### Added

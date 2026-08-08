@@ -1,17 +1,20 @@
 /**
- * Opt-in contract suite against the installed autopilot-multi CLI.
- * Skipped unless AUTOPILOT_INSTALLED_CLI_TEST=1.
+ * Release-qualification contract suite against the installed autopilot-multi CLI.
  *
- * Never runs in ordinary CI by default.
+ * This file intentionally uses the `.contract.ts` suffix (not `*.test.ts`) so
+ * ordinary unit and branch-coverage discovery do not accidentally depend on an
+ * external installation. `verify:phase-1` invokes it unconditionally:
+ *
+ *   bun test ./packages/autopilot/src/runner/installed-cli.contract.ts
+ *
+ * A missing installation fails release qualification; it is never skipped.
  */
 
 import { describe, expect, test } from "bun:test";
 import { access, constants } from "node:fs/promises";
 import { join } from "node:path";
 
-const ENABLED = process.env.AUTOPILOT_INSTALLED_CLI_TEST === "1";
-
-describe.skipIf(!ENABLED)("installed autopilotagent CLI contract", () => {
+describe("installed autopilotagent CLI contract", () => {
 	test("run.sh exists and documents run.pid + SIGUSR1", async () => {
 		const runSh = process.env.AUTOPILOT_MULTI_ROOT
 			? join(process.env.AUTOPILOT_MULTI_ROOT, "run.sh")
@@ -35,12 +38,5 @@ describe.skipIf(!ENABLED)("installed autopilotagent CLI contract", () => {
 	test("global autopilotagent is executable when enabled", async () => {
 		const which = Bun.which("autopilotagent");
 		expect(which).toBeTruthy();
-	});
-});
-
-describe("installed CLI gate", () => {
-	test("default suite does not require installed CLI (skip marker)", () => {
-		// This always-pass sentinel proves the opt-in suite is gated.
-		expect(ENABLED || !ENABLED).toBe(true);
 	});
 });

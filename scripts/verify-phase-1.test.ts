@@ -75,7 +75,7 @@ describe("assertQualificationScriptContract", () => {
 			"utf8",
 		);
 
-		expect(source).toContain("packages/autopilot/src/runner/installed-cli.contract.ts");
+		expect(source).toContain("./packages/autopilot/src/runner/installed-cli.contract.ts");
 		expect(source).not.toMatch(/fuser\s+-k|kill.*5173/i);
 		expect(installedContract).not.toMatch(/AUTOPILOT_INSTALLED_CLI_TEST|opt-in/i);
 	});
@@ -93,6 +93,18 @@ describe("assertQualificationScriptContract", () => {
 });
 
 describe("assertDocumentationAlignment", () => {
+	test("every operator-facing document reports the ledger qualification status exactly", () => {
+		for (const relativePath of [
+			"README.md",
+			"docs/deployment.md",
+			"docs/operations.md",
+			"CHANGELOG.md",
+		]) {
+			const body = readFileSync(join(ROOT, relativePath), "utf8");
+			expect(body).toContain("Phase 1 qualification status: NOT QUALIFIED");
+		}
+	});
+
 	test("passes for the live repository docs", () => {
 		const result = assertDocumentationAlignment(ROOT);
 		expect(result.ok).toBe(true);

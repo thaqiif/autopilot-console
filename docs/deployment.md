@@ -155,6 +155,8 @@ Structured progress and audit correlation fields (`projectId`, `featureId`,
 
 ## Phase 1 release qualification
 
+Phase 1 qualification status: NOT QUALIFIED
+
 Before claiming Phase 1 is release-qualified, run the single aggregate command
 twice consecutively from a clean documented environment:
 
@@ -170,19 +172,19 @@ missing, skipped, unavailable, or failing. Named gates:
 
 | Gate | What it runs |
 | --- | --- |
-| dependencies | Bun, PostgreSQL, Docker CLI, Playwright Chromium |
+| dependencies | Bun, PostgreSQL, live Docker daemon + Compose, Playwright Chromium |
 | typecheck | `bun run typecheck` |
 | lint | `bun run lint` |
 | unit | workspace unit suites + architecture tests |
 | database | `packages/database` integration suites |
-| process | worker, API, git, GitHub, autopilot, and `tests/integration` |
+| process | worker, API, git, GitHub, autopilot, installed CLI contract, and `tests/integration` |
 | browser | Playwright (`apps/web` e2e) + composition specs (`tests/e2e`) |
 | coverage | `bun run coverage:critical` |
 | build | production package builds |
 | migrations | forward-only database migrate |
-| image | Dockerfile presence + `docker compose build --check` / build graph |
-| compose | `docker compose config` service graph |
-| deployment-smoke | idempotent schema/health probe against DATABASE_URL |
+| image | Dockerfile/build-graph checks and materialization of every Compose image |
+| compose | fresh uniquely named stack from empty volumes, waited to healthy state |
+| deployment-smoke | live API/worker/web probes and PostgreSQL dump/drop/restore verification |
 
 No critical installed-CLI, database, process, browser, migration, image, or
 deployment test is skipped or opt-in when qualification is claimed. The command

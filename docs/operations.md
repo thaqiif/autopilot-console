@@ -268,6 +268,8 @@ age, and GitHub polling lag.
 
 ## Phase 1 release qualification
 
+Phase 1 qualification status: NOT QUALIFIED
+
 Operators claim Phase 1 release qualification only after the documented command
 passes twice consecutively:
 
