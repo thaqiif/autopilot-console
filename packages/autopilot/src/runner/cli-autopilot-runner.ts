@@ -316,29 +316,41 @@ export class CliAutopilotRunner implements AutopilotRunner {
 
 	async wait(handle: AutopilotRunHandle, options?: WaitOptions): Promise<NormalizedRunResult> {
 		const live = this.lives.get(this.handleKey(handle));
-		const timeoutMs = options?.timeoutMs ?? 60_000;
+		const timeoutMs = options?.timeoutMs;
+		if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs < 0)) {
+			validationError("wait timeout must be a finite, non-negative number");
+		}
 
 		if (live) {
-			await Promise.race([
-				live.exited,
-				new Promise<void>((_, reject) => {
-					setTimeout(() => reject(new Error(`wait timeout after ${timeoutMs}ms`)), timeoutMs);
-				}),
-			]).catch(async (err) => {
-				// On timeout, leave process; surface as interrupted-like result.
-				if (err instanceof Error && err.message.startsWith("wait timeout")) {
-					live.exitCode = live.exitCode ?? null;
-				} else {
-					throw err;
+			if (timeoutMs === undefined) {
+				await live.exited;
+			} else {
+				let timeout: ReturnType<typeof setTimeout> | undefined;
+				try {
+					await Promise.race([
+						live.exited,
+						new Promise<void>((_, reject) => {
+							timeout = setTimeout(
+								() => reject(new Error(`wait timeout after ${timeoutMs}ms`)),
+								timeoutMs,
+							);
+						}),
+					]);
+				} finally {
+					if (timeout !== undefined) clearTimeout(timeout);
 				}
-			});
+			}
 		} else {
-			// No live handle — poll until dead or timeout.
-			const start = Date.now();
-			while (Date.now() - start < timeoutMs) {
+			// No in-memory child handle (for example, after a worker restart): poll identity.
+			const deadline = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
+			while (true) {
 				const alive = await this.isAlive(handle).catch(() => false);
 				if (!alive) break;
-				await Bun.sleep(50);
+				if (deadline !== undefined && Date.now() >= deadline) {
+					throw new Error(`wait timeout after ${timeoutMs}ms`);
+				}
+				const sleepMs = deadline === undefined ? 50 : Math.min(50, deadline - Date.now());
+				await Bun.sleep(Math.max(0, sleepMs));
 			}
 		}
 

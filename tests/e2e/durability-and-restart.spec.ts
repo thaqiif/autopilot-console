@@ -93,7 +93,7 @@ async function setupQueuedFeature(
 	token: string,
 	name: string,
 	slug: string,
-): Promise<{ projectId: string; featureId: string; attemptId: string; branchName: string }> {
+): Promise<{ projectId: string; featureId: string; attemptId: string }> {
 	const projectDir = join(tempDir, slug);
 	await mkdir(projectDir, { recursive: true });
 	await writeFile(join(projectDir, ".git"), "");
@@ -128,7 +128,6 @@ async function setupQueuedFeature(
 	expect(featureRes.status).toBe(201);
 	const featureBody = await featureRes.json();
 	const featureId = featureBody.data.id as string;
-	const branchName = String(featureBody.data.branchName ?? featureBody.data.branch_name ?? "");
 
 	const taskPath = join(projectDir, "docs", "tasks", `${slug}.json`);
 	await mkdir(join(projectDir, "docs", "tasks"), { recursive: true });
@@ -153,7 +152,7 @@ async function setupQueuedFeature(
 	const approveBody = await approveRes.json();
 	const attemptId = approveBody.data.attempt.id as string;
 
-	return { projectId, featureId, attemptId, branchName };
+	return { projectId, featureId, attemptId };
 }
 
 beforeAll(async () => {
