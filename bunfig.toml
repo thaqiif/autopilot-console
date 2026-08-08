@@ -15,3 +15,4 @@ coveragePathIgnorePatterns = [
   "**/dist/**",
   "**/coverage/**"
 ]
+exclude = ["**/e2e/**", "**/*.spec.ts", "**/*.spec.tsx"]
