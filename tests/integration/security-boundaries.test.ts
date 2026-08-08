@@ -17,8 +17,8 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCancellationController } from "../../apps/worker/src/process/cancellation-controller";
 import { createPostgresPrReconciliationStore } from "../../apps/worker/src/github/pr-reconciliation-store";
+import { createCancellationController } from "../../apps/worker/src/process/cancellation-controller";
 import {
 	createOutboxIntent,
 	createWorkerRegistration,
@@ -104,11 +104,7 @@ async function apiCall(
 		headers["Content-Type"] = "application/json";
 		jsonBody = JSON.stringify(body);
 	}
-	if (
-		["POST", "PUT", "PATCH", "DELETE"].includes(method) &&
-		headers["x-csrf-token"] === undefined &&
-		!Object.hasOwn(extraHeaders, "x-csrf-token")
-	) {
+	if (["POST", "PUT", "PATCH", "DELETE"].includes(method) && !("x-csrf-token" in headers)) {
 		headers["x-csrf-token"] = await ctx.api.issueCsrf(token);
 	}
 	const res = await ctx.api.app.request(path, { method, headers, body: jsonBody });
@@ -177,8 +173,9 @@ async function setupProjectWithFeature(
 		relativeTaskPath: `docs/tasks/${slug}.json`,
 	});
 	expect(attachRes.status).toBe(200);
-	const checksum = (attachRes.body.data?.approval as { checksum?: string } | undefined)?.checksum
-		?? (attachRes.body.data?.checksum as string | undefined);
+	const checksum =
+		(attachRes.body.data?.approval as { checksum?: string } | undefined)?.checksum ??
+		(attachRes.body.data?.checksum as string | undefined);
 	expect(typeof checksum).toBe("string");
 
 	return {
@@ -205,6 +202,66 @@ async function countAttempts(featureId: string): Promise<number> {
 		SELECT count(*)::int AS n FROM development_job_attempts WHERE feature_id = ${featureId}
 	`;
 	return Number(rows[0]?.n ?? -1);
+}
+
+function expectRejected(
+	res: { status: number; body: JsonBody },
+	status: number,
+	code: string,
+): void {
+	expect(res.status).toBe(status);
+	expect(res.body.error?.code).toBe(code);
+	if (res.body.error?.httpStatus !== undefined) {
+		expect(res.body.error.httpStatus).toBe(status);
+	}
+}
+
+async function approveQueue(
+	token: string,
+	setup: { projectId: string; featureId: string; approvalChecksum: string },
+	operationKey: string,
+	displayedChecksum?: string,
+): Promise<{ status: number; body: JsonBody }> {
+	return apiCall(token, "POST", `/api/features/${setup.featureId}/approve-queue`, {
+		projectId: setup.projectId,
+		featureId: setup.featureId,
+		displayedChecksum: displayedChecksum ?? setup.approvalChecksum,
+		operationKey,
+		confirmation: "approve-and-queue",
+	});
+}
+
+function attemptIdFrom(body: JsonBody): string {
+	const attempt = body.data?.attempt as { id?: string } | undefined;
+	expect(typeof attempt?.id).toBe("string");
+	return attempt?.id as string;
+}
+
+async function completeAttemptAndCreatePr(
+	setup: { projectId: string; featureId: string },
+	attemptId: string,
+	dedupeKey: string,
+): Promise<void> {
+	await updateAttemptStatus(ctx.sql, attemptId, {
+		status: "SUCCEEDED",
+		endedAt: ctx.clock.now(),
+	});
+	await ctx.sql`
+		UPDATE features
+		SET state = ${"DEVELOPMENT_COMPLETE"},
+		    row_version = row_version + 1,
+		    updated_at = now()
+		WHERE id = ${setup.featureId}
+	`;
+	await createOutboxIntent(ctx.sql, {
+		projectId: setup.projectId,
+		featureId: setup.featureId,
+		attemptId,
+		kind: "create_pr",
+		dedupeKey,
+		payload: { attemptId },
+	});
+	await ctx.githubRuntime.processPendingHandoffs();
 }
 
 beforeAll(async () => {
@@ -264,9 +321,7 @@ describe("security boundaries — workspace and task paths", () => {
 			developmentBranch: "main",
 		});
 
-		expect(res.status).toBe(400);
-		expect(res.body.error?.code).toBe("VALIDATION_FAILED");
-		expect(res.body.error?.httpStatus).toBe(400);
+		expectRejected(res, 400, "VALIDATION_FAILED");
 		expect(await countProjects()).toBe(before);
 	});
 
@@ -289,8 +344,7 @@ describe("security boundaries — workspace and task paths", () => {
 			developmentBranch: "main",
 		});
 
-		expect(res.status).toBe(400);
-		expect(res.body.error?.code).toBe("VALIDATION_FAILED");
+		expectRejected(res, 400, "VALIDATION_FAILED");
 		expect(await countProjects()).toBe(before);
 	});
 
@@ -302,15 +356,13 @@ describe("security boundaries — workspace and task paths", () => {
 		const traversal = await apiCall(token, "POST", `/api/features/${setup.featureId}/task`, {
 			relativeTaskPath: "../../../etc/passwd.json",
 		});
-		expect(traversal.status).toBe(400);
-		expect(traversal.body.error?.code).toBe("VALIDATION_FAILED");
+		expectRejected(traversal, 400, "VALIDATION_FAILED");
 		expect(traversal.body.error?.message).toMatch(/traversal|absolute|relative/i);
 
 		const absolute = await apiCall(token, "POST", `/api/features/${setup.featureId}/task`, {
 			relativeTaskPath: "/etc/passwd.json",
 		});
-		expect(absolute.status).toBe(400);
-		expect(absolute.body.error?.code).toBe("VALIDATION_FAILED");
+		expectRejected(absolute, 400, "VALIDATION_FAILED");
 		expect(absolute.body.error?.message).toMatch(/absolute|relative/i);
 
 		// Feature row remains; no second approval / no path change to the escape.
@@ -379,16 +431,9 @@ describe("security boundaries — process and PR identity", () => {
 		const token = await loginApi();
 		const setup = await setupProjectWithFeature(token, "Pid Reuse", "pid-reuse");
 
-		const approve = await apiCall(token, "POST", `/api/features/${setup.featureId}/approve-queue`, {
-			projectId: setup.projectId,
-			featureId: setup.featureId,
-			displayedChecksum: setup.approvalChecksum,
-			operationKey: `approve-${setup.featureId}`,
-			confirmation: "approve-and-queue",
-		});
+		const approve = await approveQueue(token, setup, `approve-${setup.featureId}`);
 		expect(approve.status).toBe(200);
-		const attemptId = (approve.body.data?.attempt as { id: string }).id;
-		expect(typeof attemptId).toBe("string");
+		const attemptId = attemptIdFrom(approve.body);
 
 		const claimed = await ctx.queue.claimNextAttempt(ctx.workerId);
 		expect(claimed?.attempt.id).toBe(attemptId);
@@ -442,52 +487,24 @@ describe("security boundaries — process and PR identity", () => {
 		);
 		expect(blocked.kind).toBe("blocked");
 		expect(blocked.reason).toMatch(/PID reuse/i);
-		expect(signals).toEqual([]);
 
 		const after = await getDevelopmentAttempt(ctx.sql, attemptId);
 		// Must not have been cancelled via signals; blocked path persists BLOCKED / interrupted style.
 		expect(after?.status).not.toBe("CANCELLED");
-		expect(signals).toHaveLength(0);
+		expect(signals).toEqual([]);
 	});
 
 	test("duplicate PR handoff reuses one PR identity with a single create effect", async () => {
 		const token = await loginApi();
 		const setup = await setupProjectWithFeature(token, "Pr Dup", "pr-dup");
 
-		const approve = await apiCall(token, "POST", `/api/features/${setup.featureId}/approve-queue`, {
-			projectId: setup.projectId,
-			featureId: setup.featureId,
-			displayedChecksum: setup.approvalChecksum,
-			operationKey: `approve-pr-dup-${setup.featureId}`,
-			confirmation: "approve-and-queue",
-		});
+		const approve = await approveQueue(token, setup, `approve-pr-dup-${setup.featureId}`);
 		expect(approve.status).toBe(200);
-		const attemptId = (approve.body.data?.attempt as { id: string }).id;
+		const attemptId = attemptIdFrom(approve.body);
 
 		const claimed = await ctx.queue.claimNextAttempt(ctx.workerId);
 		expect(claimed?.attempt.id).toBe(attemptId);
-		await updateAttemptStatus(ctx.sql, attemptId, {
-			status: "SUCCEEDED",
-			endedAt: ctx.clock.now(),
-		});
-		await ctx.sql`
-			UPDATE features
-			SET state = ${"DEVELOPMENT_COMPLETE"},
-			    row_version = row_version + 1,
-			    updated_at = now()
-			WHERE id = ${setup.featureId}
-		`;
-
-		await createOutboxIntent(ctx.sql, {
-			projectId: setup.projectId,
-			featureId: setup.featureId,
-			attemptId,
-			kind: "create_pr",
-			dedupeKey: `create_pr:${attemptId}`,
-			payload: { attemptId },
-		});
-
-		await ctx.githubRuntime.processPendingHandoffs();
+		await completeAttemptAndCreatePr(setup, attemptId, `create_pr:${attemptId}`);
 		expect(ctx.githubState.prs.size).toBe(1);
 		const [pr1] = await ctx.sql`
 			SELECT number FROM pull_requests WHERE feature_id = ${setup.featureId}
@@ -584,16 +601,14 @@ describe("security boundaries — session, CSRF, origin, cross-project", () => {
 
 		const missing = await ctx.api.app.request("/api/projects", { method: "GET" });
 		const missingBody = (await missing.json()) as JsonBody;
-		expect(missing.status).toBe(401);
-		expect(missingBody.error?.code).toBe("UNAUTHORIZED");
+		expectRejected({ status: missing.status, body: missingBody }, 401, "UNAUTHORIZED");
 
 		const invalid = await ctx.api.app.request("/api/projects", {
 			method: "GET",
 			headers: { Cookie: "ac_session=invalid-token-that-does-not-exist" },
 		});
 		const invalidBody = (await invalid.json()) as JsonBody;
-		expect(invalid.status).toBe(401);
-		expect(invalidBody.error?.code).toBe("UNAUTHORIZED");
+		expectRejected({ status: invalid.status, body: invalidBody }, 401, "UNAUTHORIZED");
 
 		const loginResult = await ctx.sessionService.login({
 			username: ADMIN_USERNAME,
@@ -613,15 +628,13 @@ describe("security boundaries — session, CSRF, origin, cross-project", () => {
 			headers: { Cookie: `ac_session=${rawToken}` },
 		});
 		const expiredBody = (await expiredApi.json()) as JsonBody;
-		expect(expiredApi.status).toBe(401);
-		expect(expiredBody.error?.code).toBe("UNAUTHORIZED");
+		expectRejected({ status: expiredApi.status, body: expiredBody }, 401, "UNAUTHORIZED");
 
 		// Fresh session then revoke.
 		const fresh = await loginApi();
 		await ctx.sessionService.logout({ rawToken: fresh });
 		const revoked = await apiCall(fresh, "GET", "/api/projects");
-		expect(revoked.status).toBe(401);
-		expect(revoked.body.error?.code).toBe("UNAUTHORIZED");
+		expectRejected(revoked, 401, "UNAUTHORIZED");
 
 		expect(await countProjects()).toBe(before);
 	});
@@ -651,8 +664,7 @@ describe("security boundaries — session, CSRF, origin, cross-project", () => {
 			body: JSON.stringify(payload),
 		});
 		const missingBody = (await missingCsrf.json()) as JsonBody;
-		expect(missingCsrf.status).toBe(403);
-		expect(missingBody.error?.code).toBe("FORBIDDEN");
+		expectRejected({ status: missingCsrf.status, body: missingBody }, 403, "FORBIDDEN");
 
 		const invalidCsrf = await ctx.api.app.request("/api/projects", {
 			method: "POST",
@@ -664,8 +676,7 @@ describe("security boundaries — session, CSRF, origin, cross-project", () => {
 			body: JSON.stringify({ ...payload, slug: "bad-csrf" }),
 		});
 		const invalidBody = (await invalidCsrf.json()) as JsonBody;
-		expect(invalidCsrf.status).toBe(403);
-		expect(invalidBody.error?.code).toBe("FORBIDDEN");
+		expectRejected({ status: invalidCsrf.status, body: invalidBody }, 403, "FORBIDDEN");
 
 		const csrf = await ctx.api.issueCsrf(token);
 		const badOrigin = await ctx.api.app.request("/api/projects", {
@@ -679,8 +690,7 @@ describe("security boundaries — session, CSRF, origin, cross-project", () => {
 			body: JSON.stringify({ ...payload, slug: "bad-origin" }),
 		});
 		const originBody = (await badOrigin.json()) as JsonBody;
-		expect(badOrigin.status).toBe(403);
-		expect(originBody.error?.code).toBe("FORBIDDEN");
+		expectRejected({ status: badOrigin.status, body: originBody }, 403, "FORBIDDEN");
 
 		expect(await countProjects()).toBe(before);
 	});
@@ -697,8 +707,7 @@ describe("security boundaries — session, CSRF, origin, cross-project", () => {
 			title: "Cross Feature",
 			slug: "cross-feature",
 		});
-		expect(cross.status).toBe(404);
-		expect(cross.body.error?.code).toBe("NOT_FOUND");
+		expectRejected(cross, 404, "NOT_FOUND");
 		expect(await countFeatures()).toBe(beforeFeatures);
 	});
 });
@@ -709,34 +718,21 @@ describe("security boundaries — stale observations", () => {
 		const setup = await setupProjectWithFeature(token, "Stale Guard", "stale-guard");
 
 		// Stale checksum — exact CONFLICT, no attempt.
-		const staleChecksum = await apiCall(
+		const staleChecksum = await approveQueue(
 			token,
-			"POST",
-			`/api/features/${setup.featureId}/approve-queue`,
-			{
-				projectId: setup.projectId,
-				featureId: setup.featureId,
-				displayedChecksum: "sha256:stale-not-current",
-				operationKey: `approve-${setup.featureId}-stale-checksum`,
-				confirmation: "approve-and-queue",
-			},
+			setup,
+			`approve-${setup.featureId}-stale-checksum`,
+			"sha256:stale-not-current",
 		);
-		expect(staleChecksum.status).toBe(409);
-		expect(staleChecksum.body.error?.code).toBe("CONFLICT");
+		expectRejected(staleChecksum, 409, "CONFLICT");
 		expect(await countAttempts(setup.featureId)).toBe(0);
 		const notQueued = await getFeatureById(ctx.sql, setup.featureId);
 		expect(notQueued?.state).not.toBe("QUEUED");
 
 		// Fresh approve for subsequent stale probes.
-		const ok = await apiCall(token, "POST", `/api/features/${setup.featureId}/approve-queue`, {
-			projectId: setup.projectId,
-			featureId: setup.featureId,
-			displayedChecksum: setup.approvalChecksum,
-			operationKey: `approve-${setup.featureId}-fresh`,
-			confirmation: "approve-and-queue",
-		});
+		const ok = await approveQueue(token, setup, `approve-${setup.featureId}-fresh`);
 		expect(ok.status).toBe(200);
-		const attemptId = (ok.body.data?.attempt as { id: string }).id;
+		const attemptId = attemptIdFrom(ok.body);
 
 		// Stale feature row version — domain transition + SQL optimistic guard.
 		const feature = await getFeatureById(ctx.sql, setup.featureId);
@@ -795,26 +791,7 @@ describe("security boundaries — stale observations", () => {
 		expect(afterStaleRenew?.workerRegistrationId).toBe(newerWorker.id);
 
 		// Stale GitHub poll observation cannot overwrite newer head.
-		await updateAttemptStatus(ctx.sql, attemptId, {
-			status: "SUCCEEDED",
-			endedAt: ctx.clock.now(),
-		});
-		await ctx.sql`
-			UPDATE features
-			SET state = ${"DEVELOPMENT_COMPLETE"},
-			    row_version = row_version + 1,
-			    updated_at = now()
-			WHERE id = ${setup.featureId}
-		`;
-		await createOutboxIntent(ctx.sql, {
-			projectId: setup.projectId,
-			featureId: setup.featureId,
-			attemptId,
-			kind: "create_pr",
-			dedupeKey: `create_pr:${attemptId}`,
-			payload: { attemptId },
-		});
-		await ctx.githubRuntime.processPendingHandoffs();
+		await completeAttemptAndCreatePr(setup, attemptId, `create_pr:${attemptId}`);
 		const [pr] = await ctx.sql`
 			SELECT number FROM pull_requests WHERE feature_id = ${setup.featureId}
 		`;

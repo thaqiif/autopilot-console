@@ -27,7 +27,7 @@ const SENSITIVE_KEYS = new Set([
 	"privatekey",
 ]);
 
-const GITHUB_TOKEN_RE = /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g;
+const GITHUB_TOKEN_RE = /\b(?:gh[pousr]_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,})\b/g;
 
 // Authorization / Cookie header lines and JSON-ish key:value pairs with credentials.
 const AUTH_HEADER_RE = /^(Authorization)\s*:\s*.+$/gim;
