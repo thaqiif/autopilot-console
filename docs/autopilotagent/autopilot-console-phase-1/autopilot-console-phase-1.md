@@ -152,6 +152,14 @@ After merge, the feature enters **Development Merged**, which is the Phase 1 ter
 
 ## 4. Requirements
 
+The numbered clauses in this PRD define product intent. The executable task
+ledger in `autopilot-console-phase-1.json` decomposes that intent into bounded
+requirements 1–48. Each ledger requirement owns one independently testable
+component, production-composition outcome, owner experience, or qualification
+gate. A ledger item is complete only when all of its acceptance statements,
+TDD phases, and verification steps pass; completion of a component does not
+imply that its production entrypoint or aggregate release gate is complete.
+
 ### 4.1 Functional requirements
 
 #### F-1. Single-administrator authentication
