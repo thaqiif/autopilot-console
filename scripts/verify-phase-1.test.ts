@@ -293,12 +293,14 @@ describe("runPhase1Qualification fail-closed behavior", () => {
 					durationMs: 100,
 					exitCode: 1,
 					message: "Gate typecheck failed",
+					outputTail: "specific compiler failure",
 				},
 			],
 		});
 		expect(text).toMatch(/FAIL/);
 		expect(text).toMatch(/bun run verify:phase-1/);
 		expect(text).toMatch(/typecheck/);
+		expect(text).toContain("specific compiler failure");
 		expect(text).toMatch(/fails closed|failed closed/i);
 	});
 
