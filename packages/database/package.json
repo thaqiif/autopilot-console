@@ -1,0 +1,19 @@
+{
+	"name": "@autopilot-console/database",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "bun test",
+		"lint": "biome check .",
+		"build": "tsc --noEmit -p tsconfig.json",
+		"migrate": "bun run src/migrate.ts"
+	},
+	"dependencies": {
+		"postgres": "^3.4.9"
+	}
+}

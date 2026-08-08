@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Gens-ai/autopilotagent/main/analytics.schema.json",
+  "sessionId": "2026-07-18T01:47:49Z-req12",
+  "startedAt": "2026-07-18T01:47:49Z",
+  "completedAt": "2026-07-18T04:51:53.860Z",
+  "taskFile": "docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.json",
+  "mode": "tasks",
+  "maxIterations": 15,
+  "actualIterations": 1,
+  "requirements": [
+    {
+      "id": "12",
+      "status": "completed"
+    }
+  ],
+  "summary": {
+    "requirement": "12",
+    "status": "passed",
+    "completedAt": "2026-07-18T04:51:53.860Z"
+  }
+}

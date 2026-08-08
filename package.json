@@ -1,0 +1,35 @@
+{
+	"name": "autopilot-console",
+	"private": true,
+	"version": "0.0.0",
+	"workspaces": [
+		"apps/*",
+		"packages/*"
+	],
+	"scripts": {
+		"test": "bun run --filter '*' --sequential test && bun test tests scripts",
+		"test:integration": "bun test **/*.integration.test.ts",
+		"typecheck": "bun run --filter '*' --sequential typecheck",
+		"lint": "biome check .",
+		"coverage": "bun test --coverage",
+		"coverage:critical": "bun run scripts/check-critical-coverage.ts",
+		"build": "bun run --filter '*' --sequential build",
+		"verify:phase-1": "bun run scripts/verify-phase-1.ts"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.4",
+		"@happy-dom/global-registrator": "^20.10.6",
+		"@testing-library/react": "16.1.0",
+		"@types/bun": "1.3.14",
+		"@types/istanbul-lib-instrument": "1.7.8",
+		"@types/yaml": "^1.9.7",
+		"istanbul-lib-instrument": "^6.0.3",
+		"typescript": "5.9.3",
+		"web": "^0.0.2",
+		"yaml": "^2.9.0"
+	},
+	"packageManager": "bun@1.3.14",
+	"dependencies": {
+		"postgres": "^3.4.9"
+	}
+}

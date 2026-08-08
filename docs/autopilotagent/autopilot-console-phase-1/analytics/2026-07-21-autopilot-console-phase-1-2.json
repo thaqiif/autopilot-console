@@ -1,0 +1,41 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Gens-ai/autopilotagent/main/analytics.schema.json",
+  "sessionId": "20260721T220640Z-autopilot-console-phase-1-2",
+  "startedAt": "2026-07-21T22:06:40Z",
+  "completedAt": "2026-07-21T22:25:30Z",
+  "taskFile": "docs/autopilotagent/autopilot-console-phase-1/autopilot-console-phase-1.json",
+  "mode": "tasks",
+  "maxIterations": 15,
+  "actualIterations": 1,
+  "requirements": [
+    {
+      "id": "22",
+      "description": "Authenticated idempotent mutation APIs and guarded lifecycle actions",
+      "status": "completed",
+      "iterations": 1,
+      "errors": [
+        {
+          "attempt": 1,
+          "phase": "green",
+          "type": "build_error",
+          "message": "The deliberately partial task-service fake no longer structurally matched the expanded production interface.",
+          "command": "bun run --cwd apps/api typecheck",
+          "resolution": "Made the existing explicit test-double cast pass through unknown; production implementations remain fully typed."
+        },
+        {
+          "attempt": 1,
+          "phase": "refactor",
+          "type": "lint_error",
+          "message": "The new domain replacement method did not match Biome's deterministic formatting.",
+          "command": "bun run --cwd packages/domain lint",
+          "resolution": "Applied Biome's exact method-signature and guard formatting, then reran the full API/domain gate set successfully."
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "completed": 1,
+    "stuck": 0,
+    "invalidTest": 0
+  }
+}
