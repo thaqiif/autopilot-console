@@ -216,4 +216,106 @@ describe("runPhase1Qualification fail-closed behavior", () => {
 		expect(text).toMatch(/typecheck/);
 		expect(text).toMatch(/fails closed|failed closed/i);
 	});
+
+	test("image gate fails closed when Docker daemon is unavailable", async () => {
+		const printGraph = JSON.stringify({
+			target: {
+				api: { context: "." },
+				web: { context: "." },
+				worker: { context: "." },
+				migrate: { context: "." },
+			},
+		});
+		const spawn = async (cmd: string[]): Promise<SpawnResult> => {
+			const joined = cmd.join(" ");
+			if (joined.includes("command -v docker")) {
+				return { exitCode: 0, stdout: "/usr/bin/docker\n", stderr: "" };
+			}
+			if (joined.includes("compose version")) {
+				return { exitCode: 0, stdout: "Docker Compose version v5.3.1\n", stderr: "" };
+			}
+			if (joined.includes("select 1") || joined.includes("postgres")) {
+				return { exitCode: 0, stdout: "postgres-ok\n", stderr: "" };
+			}
+			if (joined.includes("docker info")) {
+				return {
+					exitCode: 1,
+					stdout: "",
+					stderr: "Cannot connect to the Docker daemon\n",
+				};
+			}
+			if (joined.includes("--print")) {
+				return { exitCode: 0, stdout: printGraph, stderr: "" };
+			}
+			if (joined.includes("--check")) {
+				return {
+					exitCode: 1,
+					stdout: "",
+					stderr: "Cannot connect to the Docker daemon\n",
+				};
+			}
+			if (joined.includes("compose config")) {
+				return {
+					exitCode: 0,
+					stdout:
+						"name: autopilot-console\nservices:\n  web:\n    image: x\n  api:\n    image: x\n  worker:\n    image: x\n  postgres:\n    image: x\n  migrate:\n    image: x\n",
+					stderr: "",
+				};
+			}
+			if (joined.includes("deployment-smoke") || joined.includes("createDatabaseClient")) {
+				return { exitCode: 0, stdout: "deployment-smoke-ok tables=12\n", stderr: "" };
+			}
+			return { exitCode: 0, stdout: "ok\n 0 skip\n", stderr: "" };
+		};
+
+		const summary = await runPhase1Qualification({
+			root: ROOT,
+			spawn,
+			failFast: true,
+			env: { DATABASE_URL: "postgres://postgres:postgres@127.0.0.1:5432/autopilot_console" },
+		});
+		const image = summary.gates.find((g) => g.name === "image");
+		expect(image?.ok).toBe(false);
+		expect(image?.message ?? "").toMatch(/Docker daemon.*unavailable|cannot connect/i);
+		expect(summary.ok).toBe(false);
+	});
+
+	test("image gate fails closed when build graph omits a required target", async () => {
+		const printGraph = JSON.stringify({
+			target: {
+				api: { context: "." },
+				web: { context: "." },
+			},
+		});
+		const spawn = async (cmd: string[]): Promise<SpawnResult> => {
+			const joined = cmd.join(" ");
+			if (joined.includes("command -v docker")) {
+				return { exitCode: 0, stdout: "/usr/bin/docker\n", stderr: "" };
+			}
+			if (joined.includes("compose version")) {
+				return { exitCode: 0, stdout: "Docker Compose version v5.3.1\n", stderr: "" };
+			}
+			if (joined.includes("select 1") || joined.includes("postgres")) {
+				return { exitCode: 0, stdout: "postgres-ok\n", stderr: "" };
+			}
+			if (joined.includes("docker info")) {
+				return { exitCode: 1, stdout: "", stderr: "daemon down\n" };
+			}
+			if (joined.includes("--print")) {
+				return { exitCode: 0, stdout: printGraph, stderr: "" };
+			}
+			return { exitCode: 0, stdout: "ok\n 0 skip\n", stderr: "" };
+		};
+
+		const summary = await runPhase1Qualification({
+			root: ROOT,
+			spawn,
+			failFast: true,
+			env: { DATABASE_URL: "postgres://postgres:postgres@127.0.0.1:5432/autopilot_console" },
+		});
+		expect(summary.ok).toBe(false);
+		const image = summary.gates.find((g) => g.name === "image");
+		expect(image?.ok).toBe(false);
+		expect(image?.message ?? "").toMatch(/missing targets|worker|migrate/i);
+	});
 });
