@@ -15,6 +15,7 @@ import {
 	formatSummary,
 	hasSkipSummary,
 	PHASE1_GATES,
+	qualificationEnvironment,
 	runComposeStackQualification,
 	runPhase1Qualification,
 	type SpawnResult,
@@ -67,6 +68,24 @@ describe("assertQualificationScriptContract", () => {
 			scripts?: Record<string, string>;
 		};
 		expect(packageJson.scripts?.typecheck).toContain("--sequential");
+		expect(packageJson.scripts?.build).toContain("--sequential");
+	});
+
+	test("forwards operator Compose configuration into live qualification", () => {
+		const env = qualificationEnvironment({
+			DATABASE_URL: "postgres://qualification",
+			AGENT_BIN: "bun",
+			AUTOPILOTAGENT_MOUNT: "/opt/autopilot-multi",
+			WORKSPACE_MOUNT: "/srv/projects",
+			IGNORED_UNDEFINED: undefined,
+		});
+		expect(env).toMatchObject({
+			DATABASE_URL: "postgres://qualification",
+			AGENT_BIN: "bun",
+			AUTOPILOTAGENT_MOUNT: "/opt/autopilot-multi",
+			WORKSPACE_MOUNT: "/srv/projects",
+		});
+		expect(env).not.toHaveProperty("IGNORED_UNDEFINED");
 	});
 
 	test("passes for the repository root", () => {
