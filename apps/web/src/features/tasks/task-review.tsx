@@ -21,7 +21,7 @@ const REPLACEABLE_STATES = new Set([
 	"DEVELOPMENT_CANCELLED",
 ]);
 
-const REPLACABLE_AFTER_FAILURE = new Set([
+const REAPPROVABLE_STATES = new Set([
 	"DEVELOPMENT_FAILED",
 	"DEVELOPMENT_INTERRUPTED",
 	"DEVELOPMENT_CANCELLED",
@@ -30,6 +30,7 @@ const REPLACABLE_AFTER_FAILURE = new Set([
 export interface TaskReviewProps {
 	task: TaskSnapshot;
 	checksum: string;
+	projectName: string;
 	onApprove: () => void;
 	onRemove: () => void;
 	onReplace: (path: string) => void;
@@ -43,6 +44,7 @@ export interface TaskReviewProps {
 export function TaskReview({
 	task,
 	checksum,
+	projectName,
 	onApprove,
 	onRemove,
 	onReplace,
@@ -73,7 +75,7 @@ export function TaskReview({
 	}
 
 	return (
-		<section aria-label="Task review">
+		<section aria-label="Task review" style={{ maxWidth: "100%", overflowWrap: "anywhere" }}>
 			<header>
 				<h3>{task.name}</h3>
 				<p>{task.description}</p>
@@ -130,7 +132,7 @@ export function TaskReview({
 						{showRawJson ? "Hide Raw JSON" : "Show Raw JSON"}
 					</button>
 					{showRawJson && (
-						<pre>
+						<pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
 							<code>{task.rawJson}</code>
 						</pre>
 					)}
@@ -158,8 +160,8 @@ export function TaskReview({
 					</>
 				)}
 
-				{REPLACABLE_AFTER_FAILURE.has(featureState) && (
-					<button type="button" onClick={() => setShowApproveDialog(true)}>
+				{REAPPROVABLE_STATES.has(featureState) && !staleChecksum && (
+					<button type="button" onClick={() => setShowApproveDialog(true)} disabled={isApproving}>
 						Reapprove
 					</button>
 				)}
@@ -167,7 +169,7 @@ export function TaskReview({
 
 			{showApproveDialog && (
 				<ApprovalConfirmation
-					projectName="(project)"
+					projectName={projectName}
 					featureName={task.name}
 					checksum={checksum}
 					onConfirm={handleConfirmApprove}

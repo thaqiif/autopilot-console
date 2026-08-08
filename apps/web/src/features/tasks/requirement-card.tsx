@@ -19,30 +19,33 @@ export interface RequirementCardProps {
 	requirement: RequirementSummary;
 }
 
-function StatusBadge({
-	status,
-	passes,
-	stuck,
-	invalidTest,
-}: {
-	status: string;
-	passes: boolean;
-	stuck: boolean;
-	invalidTest: boolean;
-}) {
-	if (passes || status === "passed") {
-		return <span>Passed</span>;
+function statusMeta(requirement: RequirementSummary): {
+	key: RequirementSummary["status"];
+	label: string;
+	icon: string;
+} {
+	if (requirement.passes || requirement.status === "passed") {
+		return { key: "passed", label: "Passed", icon: "✓" };
 	}
-	if (stuck || status === "stuck") {
-		return <span>Stuck</span>;
+	if (requirement.stuck || requirement.status === "stuck") {
+		return { key: "stuck", label: "Stuck", icon: "!" };
 	}
-	if (invalidTest || status === "invalid") {
-		return <span>Invalid</span>;
+	if (requirement.invalidTest || requirement.status === "invalid") {
+		return { key: "invalid", label: "Invalid", icon: "×" };
 	}
-	if (status === "in_progress") {
-		return <span>In Progress</span>;
+	if (requirement.status === "in_progress") {
+		return { key: "in_progress", label: "In Progress", icon: "…" };
 	}
-	return <span>Not Started</span>;
+	return { key: "not_started", label: "Not Started", icon: "○" };
+}
+
+function StatusBadge({ requirement }: { requirement: RequirementSummary }) {
+	const status = statusMeta(requirement);
+	return (
+		<span data-status={status.key}>
+			<span aria-hidden="true">{status.icon}</span> {status.label}
+		</span>
+	);
 }
 
 function TDDPhases({ red, green, refactor }: { red: boolean; green: boolean; refactor: boolean }) {
@@ -59,11 +62,7 @@ export function RequirementCard({ requirement }: RequirementCardProps) {
 	const {
 		id,
 		description,
-		status,
-		passes,
-		stuck,
 		stuckReason,
-		invalidTest,
 		invalidTestReason,
 		blockedReason,
 		dependsOn,
@@ -78,7 +77,7 @@ export function RequirementCard({ requirement }: RequirementCardProps) {
 			<header>
 				<span>{id}</span>
 				<h4>{description}</h4>
-				<StatusBadge status={status} passes={passes} stuck={stuck} invalidTest={invalidTest} />
+				<StatusBadge requirement={requirement} />
 			</header>
 
 			<TDDPhases red={redPhase} green={greenPhase} refactor={refactorPhase} />

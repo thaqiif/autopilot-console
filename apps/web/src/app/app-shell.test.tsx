@@ -409,7 +409,9 @@ describe("shared view states", () => {
 		render(<ViewState state="error" message="Connection failed" />);
 		const alert = screen.getByRole("alert");
 		expect(alert.textContent).toContain("Connection failed");
-		expect(alert.getAttribute("aria-label")).toBeTruthy();
+		expect(alert.getAttribute("role")).toBe("alert");
+		expect(alert.getAttribute("data-view-state")).toBe("error");
+		expect(alert.querySelector(".view-state-icon")).toBeTruthy();
 	});
 });
 

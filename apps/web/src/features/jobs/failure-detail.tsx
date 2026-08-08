@@ -1,3 +1,6 @@
+import { redactSecrets } from "@autopilot-console/shared/security/redaction";
+import { LocalDateTime } from "../../time/local-date-time";
+
 export interface FailureDetailProps {
 	code: string;
 	message: string;
@@ -5,21 +8,6 @@ export interface FailureDetailProps {
 	attemptId?: string;
 	timestamp: string;
 	nextAction?: string;
-}
-
-function formatTimestamp(iso: string): string {
-	try {
-		return new Date(iso).toLocaleString("en-US", {
-			year: "numeric",
-			month: "short",
-			day: "numeric",
-			hour: "2-digit",
-			minute: "2-digit",
-			hour12: false,
-		});
-	} catch {
-		return iso;
-	}
 }
 
 export function FailureDetail({
@@ -47,7 +35,9 @@ export function FailureDetail({
 					</>
 				)}
 				<dt>Time</dt>
-				<dd>{formatTimestamp(timestamp)}</dd>
+				<dd>
+					<LocalDateTime utc={timestamp} showTimezone />
+				</dd>
 			</dl>
 			<p>{safeMessage}</p>
 			{nextAction && (
@@ -59,5 +49,3 @@ export function FailureDetail({
 		</div>
 	);
 }
-
-import { redactSecrets } from "@autopilot-console/shared/security/redaction";

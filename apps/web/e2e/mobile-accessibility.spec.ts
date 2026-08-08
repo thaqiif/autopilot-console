@@ -198,9 +198,12 @@ test.describe("mobile accessibility at 375x667", () => {
 		await page.keyboard.press("Escape");
 	});
 
+	// Multi-route axe scans need more than the 30s default when two projects
+	// run in parallel under qualification load.
 	test("standards-based WCAG 2.2 AA scan reports no serious violations on core screens", async ({
 		page,
 	}) => {
+		test.setTimeout(120_000);
 		for (const route of CORE_ROUTES) {
 			if (route === "/login") {
 				await page.goto("/login");

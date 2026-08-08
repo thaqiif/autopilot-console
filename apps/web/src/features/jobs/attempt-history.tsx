@@ -1,3 +1,5 @@
+import { LocalDateTime } from "../../time/local-date-time";
+
 export interface AttemptRecord {
 	id: string;
 	status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "INTERRUPTED" | "CANCELLED";
@@ -15,23 +17,8 @@ export interface AttemptHistoryProps {
 	attempts: AttemptRecord[];
 }
 
-function formatTime(iso: string): string {
-	try {
-		return new Date(iso).toLocaleString("en-US", {
-			month: "short",
-			day: "numeric",
-			hour: "2-digit",
-			minute: "2-digit",
-			second: "2-digit",
-			hour12: false,
-		});
-	} catch {
-		return iso;
-	}
-}
-
 function StatusBadge({ status }: { status: string }) {
-	return <span>{status}</span>;
+	return <span data-status={status.toLowerCase()}>{status}</span>;
 }
 
 export function AttemptHistory({ attempts }: AttemptHistoryProps) {
@@ -57,17 +44,23 @@ export function AttemptHistory({ attempts }: AttemptHistoryProps) {
 							</header>
 							<dl>
 								<dt>Queued</dt>
-								<dd>{formatTime(attempt.queuedAt)}</dd>
+								<dd>
+									<LocalDateTime utc={attempt.queuedAt} showTimezone />
+								</dd>
 								{attempt.startedAt && (
 									<>
 										<dt>Started</dt>
-										<dd>{formatTime(attempt.startedAt)}</dd>
+										<dd>
+											<LocalDateTime utc={attempt.startedAt} showTimezone />
+										</dd>
 									</>
 								)}
 								{attempt.endedAt && (
 									<>
 										<dt>Ended</dt>
-										<dd>{formatTime(attempt.endedAt)}</dd>
+										<dd>
+											<LocalDateTime utc={attempt.endedAt} showTimezone />
+										</dd>
 									</>
 								)}
 								{attempt.workerId && (

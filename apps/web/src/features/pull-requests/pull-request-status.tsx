@@ -1,3 +1,5 @@
+import { LocalDateTime } from "../../time/local-date-time";
+
 export interface PullRequestStatusProps {
 	prNumber?: number;
 	prUrl?: string;
@@ -10,31 +12,16 @@ export interface PullRequestStatusProps {
 	isStale?: boolean;
 }
 
-function formatTime(iso?: string): string {
-	if (!iso) return "—";
-	try {
-		return new Date(iso).toLocaleString("en-US", {
-			month: "short",
-			day: "numeric",
-			hour: "2-digit",
-			minute: "2-digit",
-			hour12: false,
-		});
-	} catch {
-		return iso;
-	}
-}
-
 function ChecksLabel({ status }: { status?: string }) {
 	switch (status) {
 		case "PENDING":
-			return <span>CI Running</span>;
+			return <span data-status="ci-pending">CI Running</span>;
 		case "PASSING":
-			return <span>Checks passing</span>;
+			return <span data-status="ci-passing">Checks passing</span>;
 		case "FAILING":
-			return <span>CI Failed</span>;
+			return <span data-status="ci-failing">CI Failed</span>;
 		case "NONE":
-			return <span>No checks</span>;
+			return <span data-status="ci-none">No checks</span>;
 		default:
 			return null;
 	}
@@ -43,11 +30,11 @@ function ChecksLabel({ status }: { status?: string }) {
 function ReviewLabel({ decision }: { decision?: string }) {
 	switch (decision) {
 		case "APPROVED":
-			return <span>Approved</span>;
+			return <span data-status="review-approved">Approved</span>;
 		case "CHANGES_REQUESTED":
-			return <span>Changes requested</span>;
+			return <span data-status="review-changes">Changes requested</span>;
 		case "REVIEW_REQUIRED":
-			return <span>Review required</span>;
+			return <span data-status="review-required">Review required</span>;
 		case "NONE":
 			return null;
 		default:
@@ -78,7 +65,7 @@ export function PullRequestStatus({
 				</p>
 			)}
 
-			{prState && <span>{prState}</span>}
+			{prState && <span data-status={`pr-${prState.toLowerCase()}`}>{prState}</span>}
 
 			{headSha && (
 				<dl>
@@ -105,7 +92,7 @@ export function PullRequestStatus({
 
 			{lastSyncAt && (
 				<p>
-					<time dateTime={lastSyncAt}>Last synced: {formatTime(lastSyncAt)}</time>
+					Last synced: <LocalDateTime utc={lastSyncAt} showTimezone />
 				</p>
 			)}
 

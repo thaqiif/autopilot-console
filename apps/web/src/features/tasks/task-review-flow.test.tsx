@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createApiClient } from "../../api/client";
 import { AuthProvider } from "../../auth/auth-provider";
 
 // ---------------------------------------------------------------------------
@@ -27,6 +28,7 @@ let TaskAttachmentForm: React.ComponentType<{
 let TaskReview: React.ComponentType<{
 	task: TaskSnapshot;
 	checksum: string;
+	projectName: string;
 	onApprove: () => void;
 	onRemove: () => void;
 	onReplace: (path: string) => void;
@@ -195,14 +197,25 @@ const MOCK_FEATURE_DETAIL = {
 	title: "User Authentication",
 	slug: "user-auth",
 	state: "TASKS_REVIEW",
-	branch: "feature/feat-1-user-auth",
+	branchName: "feature/feat-1-user-auth",
 	projectId: "proj-1",
-	projectName: "Console",
 	releaseId: "rel-1",
-	releaseName: "v1.0",
+	summary: "Implement user authentication with OAuth2",
+	rowVersion: 1,
 	taskPath: "tasks/user-auth.json",
-	taskChecksum: "sha256:abc123def456",
-	approvalId: "approval-1",
+	taskApproval: {
+		id: "approval-1",
+		relativeTaskPath: "tasks/user-auth.json",
+		checksum: "sha256:abc123def456",
+		requirementsSnapshot: MOCK_TASK.requirements,
+		approvedAt: "2025-01-01T00:00:00.000Z",
+	},
+	progress: null,
+	attempts: [],
+	failures: [],
+	diagnosticLogs: [],
+	pullRequest: null,
+	recentActivity: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -232,12 +245,15 @@ function installFetchMock(overrides?: {
 			});
 		}
 
-		// Task snapshot
-		if (url.includes("/api/features/feat-1/task") && method === "GET") {
-			return new Response(JSON.stringify({ ok: true, data: task }), {
-				status: 200,
-				headers: { "Content-Type": "application/json" },
-			});
+		// Project name lookup used by approval confirmation
+		if (url.match(/\/api\/projects\/proj-1$/) && method === "GET") {
+			return new Response(
+				JSON.stringify({
+					ok: true,
+					data: { id: "proj-1", name: "Autopilot Console", slug: "autopilot-console" },
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
 		}
 
 		// Attach task
@@ -259,14 +275,14 @@ function installFetchMock(overrides?: {
 			return new Response(
 				JSON.stringify({
 					ok: true,
-					data: { taskPath: "tasks/user-auth.json", checksum: task.checksum },
+					data: { feature: detail, summary: task, checksum: task.checksum },
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
 		}
 
 		// Approve & queue
-		if (url.includes("/api/features/feat-1/approve") && method === "POST") {
+		if (url.includes("/api/features/feat-1/approve-queue") && method === "POST") {
 			if (overrides?.staleChecksum) {
 				return new Response(
 					JSON.stringify({
@@ -332,6 +348,7 @@ function installFetchMock(overrides?: {
 
 function renderAt(path: string, opts?: { authenticated?: boolean }) {
 	const authenticated = opts?.authenticated ?? true;
+	const client = createApiClient({ baseUrl: "", getCsrfToken: () => "test-csrf" });
 	const router = createMemoryRouter(
 		[
 			{
@@ -345,7 +362,7 @@ function renderAt(path: string, opts?: { authenticated?: boolean }) {
 			{
 				path: "/features/:id",
 				element: (
-					<AuthProvider initialAuthenticated={authenticated}>
+					<AuthProvider client={client} initialAuthenticated={authenticated}>
 						<FeatureDetailPage />
 					</AuthProvider>
 				),
@@ -360,6 +377,7 @@ function renderReview(overrides?: Partial<React.ComponentProps<typeof TaskReview
 	const props: React.ComponentProps<typeof TaskReview> = {
 		task: MOCK_TASK,
 		checksum: MOCK_TASK.checksum,
+		projectName: "Autopilot Console",
 		onApprove: () => {},
 		onRemove: () => {},
 		onReplace: () => {},
@@ -465,6 +483,16 @@ describe("task attachment path validation", () => {
 			/>,
 		);
 		expect(screen.getByText(/symlink/i)).toBeTruthy();
+	});
+
+	test("shows fresh-resumable validation failure", async () => {
+		render(
+			<TaskAttachmentForm
+				onSubmit={() => {}}
+				serverError="Task file is not a fresh resumable task artifact for this feature."
+			/>,
+		);
+		expect(screen.getByText(/fresh resumable/i)).toBeTruthy();
 	});
 
 	test("disables submit while submitting", () => {
@@ -641,12 +669,13 @@ describe("approve and queue development", () => {
 	});
 
 	test("confirmation dialog names the project and feature", async () => {
-		renderReview();
+		renderReview({ projectName: "Autopilot Console" });
 		const approveBtn = screen.getByRole("button", { name: /approve/i });
 		fireEvent.click(approveBtn);
 		await waitFor(() => {
 			const dialog = screen.getByRole("dialog");
 			expect(dialog.textContent).toMatch(/user-auth/i);
+			expect(dialog.textContent).toMatch(/autopilot console/i);
 		});
 	});
 
@@ -810,6 +839,9 @@ describe("requirement card component", () => {
 	test("displays pass status with text and icon", () => {
 		renderRequirementCard({ status: "passed", passes: true });
 		expect(screen.getByText("Passed")).toBeTruthy();
+		const badge = screen.getByText("Passed").closest("[data-status]");
+		expect(badge?.getAttribute("data-status")).toBe("passed");
+		expect(badge?.querySelector('[aria-hidden="true"]')).toBeTruthy();
 	});
 
 	test("displays stuck status with reason and not just color", () => {
@@ -1000,7 +1032,7 @@ describe("feature detail page integration", () => {
 	test("renders feature detail page at route", async () => {
 		renderAt("/features/feat-1");
 		await waitFor(() => {
-			expect(screen.queryByText(/user authentication/i)).toBeTruthy();
+			expect(screen.queryAllByText(/user authentication/i).length).toBeGreaterThan(0);
 		});
 	});
 
@@ -1022,5 +1054,252 @@ describe("feature detail page integration", () => {
 			const branches = screen.getAllByText(/feature\/feat-1-user-auth/i);
 			expect(branches.length).toBeGreaterThanOrEqual(1);
 		});
+	});
+
+	test("attaches a task with the canonical payload and renders the returned review", async () => {
+		let attachInit: RequestInit | undefined;
+		globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			if (url.includes("/api/projects/proj-1") && !url.includes("/releases")) {
+				return new Response(
+					JSON.stringify({ ok: true, data: { id: "proj-1", name: "Autopilot Console" } }),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url.endsWith("/task") && (init?.method ?? "GET") === "POST") {
+				attachInit = init;
+				return new Response(
+					JSON.stringify({
+						ok: true,
+						data: {
+							feature: { ...MOCK_FEATURE_DETAIL, taskPath: "tasks/new.json" },
+							summary: MOCK_TASK,
+							checksum: MOCK_TASK.checksum,
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response(
+				JSON.stringify({
+					ok: true,
+					data: { ...MOCK_FEATURE_DETAIL, taskPath: null, taskApproval: null },
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
+		}) as typeof fetch;
+
+		renderAt("/features/feat-1");
+		fireEvent.change(await screen.findByLabelText(/task path/i), {
+			target: { value: "tasks/new.json" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: /attach/i }));
+		await waitFor(() => expect(screen.getByText(MOCK_TASK.name)).toBeTruthy());
+		expect(JSON.parse(String(attachInit?.body))).toEqual({ relativeTaskPath: "tasks/new.json" });
+		expect((attachInit?.headers as Record<string, string> | undefined)?.["x-csrf-token"]).toBe(
+			"test-csrf",
+		);
+	});
+
+	test("approve confirmation names the project and posts the displayed checksum with targets", async () => {
+		let approveBody: Record<string, unknown> | undefined;
+		globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			const method = init?.method ?? "GET";
+			if (url.includes("/api/projects/proj-1") && method === "GET") {
+				return new Response(
+					JSON.stringify({ ok: true, data: { id: "proj-1", name: "Autopilot Console" } }),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url.includes("/approve-queue") && method === "POST") {
+				approveBody = JSON.parse(String(init?.body));
+				return new Response(
+					JSON.stringify({
+						ok: true,
+						data: {
+							feature: { ...MOCK_FEATURE_DETAIL, state: "QUEUED" },
+							approval: MOCK_FEATURE_DETAIL.taskApproval,
+							attempt: { id: "attempt-1" },
+							idempotent: false,
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url.match(/\/api\/features\/feat-1$/) && method === "GET") {
+				return new Response(JSON.stringify({ ok: true, data: MOCK_FEATURE_DETAIL }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			return new Response(null, { status: 404 });
+		}) as typeof fetch;
+
+		renderAt("/features/feat-1");
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: /approve.*queue development/i })).toBeTruthy(),
+		);
+		fireEvent.click(screen.getByRole("button", { name: /approve.*queue development/i }));
+		await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+		expect(screen.getByRole("dialog").textContent).toMatch(/autopilot console/i);
+		expect(screen.getByRole("dialog").textContent).toMatch(/user authentication|user-auth/i);
+		fireEvent.click(screen.getByRole("button", { name: /^confirm$/i }));
+		await waitFor(() => expect(approveBody).toBeTruthy());
+		expect(approveBody?.displayedChecksum).toBe(MOCK_TASK.checksum);
+		expect(approveBody?.projectId).toBe("proj-1");
+		expect(approveBody?.featureId).toBe("feat-1");
+		expect(approveBody?.confirmation).toBe("approve-and-queue");
+		expect(typeof approveBody?.operationKey).toBe("string");
+	});
+
+	test("invalidate posts the lifecycle confirmation with project and feature targets", async () => {
+		let invalidateUrl = "";
+		let invalidateBody: Record<string, unknown> | undefined;
+		globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			const method = init?.method ?? "GET";
+			if (url.includes("/api/projects/proj-1") && method === "GET") {
+				return new Response(
+					JSON.stringify({ ok: true, data: { id: "proj-1", name: "Autopilot Console" } }),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url.includes("/invalidate") && method === "POST") {
+				invalidateUrl = url;
+				invalidateBody = JSON.parse(String(init?.body));
+				return new Response(
+					JSON.stringify({
+						ok: true,
+						data: { id: "approval-1", invalidatedAt: "2025-01-02T00:00:00.000Z" },
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url.match(/\/api\/features\/feat-1$/) && method === "GET") {
+				return new Response(JSON.stringify({ ok: true, data: MOCK_FEATURE_DETAIL }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			return new Response(null, { status: 404 });
+		}) as typeof fetch;
+
+		renderAt("/features/feat-1");
+		await waitFor(() => expect(screen.getByRole("button", { name: /invalidate/i })).toBeTruthy());
+		fireEvent.click(screen.getByRole("button", { name: /invalidate/i }));
+		await waitFor(() => expect(invalidateBody).toBeTruthy());
+		expect(invalidateUrl).toContain("/api/features/feat-1/approvals/approval-1/invalidate");
+		expect(invalidateBody).toMatchObject({
+			projectId: "proj-1",
+			featureId: "feat-1",
+			confirmation: "invalidate-task-approval",
+		});
+		expect(typeof invalidateBody?.operationKey).toBe("string");
+	});
+
+	test("replace uses the replace-task confirmation and preserves attempt history copy", async () => {
+		let replaceBody: Record<string, unknown> | undefined;
+		globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			const method = init?.method ?? "GET";
+			if (url.includes("/api/projects/proj-1") && method === "GET") {
+				return new Response(
+					JSON.stringify({ ok: true, data: { id: "proj-1", name: "Autopilot Console" } }),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url.endsWith("/task") && method === "PUT") {
+				replaceBody = JSON.parse(String(init?.body));
+				return new Response(
+					JSON.stringify({
+						ok: true,
+						data: {
+							feature: { ...MOCK_FEATURE_DETAIL, taskPath: "tasks/replacement.json" },
+							summary: { ...MOCK_TASK, name: "replacement-task" },
+							checksum: "sha256:replacement",
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url.match(/\/api\/features\/feat-1$/) && method === "GET") {
+				return new Response(JSON.stringify({ ok: true, data: MOCK_FEATURE_DETAIL }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			return new Response(null, { status: 404 });
+		}) as typeof fetch;
+
+		renderAt("/features/feat-1");
+		await waitFor(() => expect(screen.getByRole("button", { name: /replace/i })).toBeTruthy());
+		fireEvent.click(screen.getByRole("button", { name: /replace/i }));
+		expect(screen.getByText(/prior approvals|attempt history|preserved/i)).toBeTruthy();
+		fireEvent.change(screen.getByLabelText(/new task path/i), {
+			target: { value: "tasks/replacement.json" },
+		});
+		const replaceDialog = screen.getByRole("dialog", { name: /replace task file/i });
+		const confirmReplace = Array.from(replaceDialog.querySelectorAll("button")).find((b) =>
+			/^replace$/i.test(b.textContent ?? ""),
+		);
+		expect(confirmReplace).toBeTruthy();
+		if (confirmReplace) fireEvent.click(confirmReplace);
+		await waitFor(() => expect(replaceBody).toBeTruthy());
+		expect(replaceBody).toMatchObject({
+			projectId: "proj-1",
+			featureId: "feat-1",
+			approvalId: "approval-1",
+			relativeTaskPath: "tasks/replacement.json",
+			confirmation: "replace-task",
+		});
+		expect(typeof replaceBody?.operationKey).toBe("string");
+	});
+
+	test("stale checksum conflict forces a refresh before another approval", async () => {
+		let approveCalls = 0;
+		globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			const method = init?.method ?? "GET";
+			if (url.includes("/api/projects/proj-1") && method === "GET") {
+				return new Response(
+					JSON.stringify({ ok: true, data: { id: "proj-1", name: "Autopilot Console" } }),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url.includes("/approve-queue") && method === "POST") {
+				approveCalls += 1;
+				return new Response(
+					JSON.stringify({
+						ok: false,
+						error: {
+							code: "CONFLICT",
+							message: "Displayed checksum is stale; refresh task review and try again",
+							httpStatus: 409,
+							nextAction: "REFRESH",
+						},
+					}),
+					{ status: 409, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url.match(/\/api\/features\/feat-1$/) && method === "GET") {
+				return new Response(JSON.stringify({ ok: true, data: MOCK_FEATURE_DETAIL }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			return new Response(null, { status: 404 });
+		}) as typeof fetch;
+
+		renderAt("/features/feat-1");
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: /approve.*queue development/i })).toBeTruthy(),
+		);
+		fireEvent.click(screen.getByRole("button", { name: /approve.*queue development/i }));
+		fireEvent.click(await screen.findByRole("button", { name: /^confirm$/i }));
+		await waitFor(() => expect(screen.getByText(/task file has changed/i)).toBeTruthy());
+		expect(screen.getByRole("button", { name: /refresh/i })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /approve.*queue development/i })).toBeNull();
+		expect(approveCalls).toBe(1);
 	});
 });
