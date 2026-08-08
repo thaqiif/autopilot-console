@@ -4,7 +4,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fullTaskFile, minimalTaskFile } from "../../../autopilot/src/testing/task-fixtures";
@@ -1252,25 +1252,21 @@ describe("tiny remaining coverage edges", () => {
 		if (!result.ok) expect(result.reason).toBe("FEATURE_NOT_FOUND");
 	});
 
-	test("attachTask maps unreadable file open failures", async () => {
+	test("attachTask maps task-path read failures independently of process privileges", async () => {
 		const service = makeService();
 		const feature = await seedFeature();
 		const relative = "docs/tasks/unreadable.json";
 		const absolute = join(projectPath, relative);
-		await mkdir(join(absolute, ".."), { recursive: true });
-		await writeFile(absolute, `${JSON.stringify(minimalTaskFile())}\n`, "utf8");
-		await chmod(absolute, 0o000);
-		try {
-			const result = await service.attachTask({
-				featureId: feature.id,
-				relativeTaskPath: relative,
-				actor: actor(),
-			});
-			expect(result.ok).toBe(false);
-			if (!result.ok) expect(result.reason).toBe("VALIDATION_FAILED");
-		} finally {
-			await chmod(absolute, 0o644);
-		}
+		// A directory with a JSON suffix produces EISDIR for root and non-root,
+		// unlike chmod(000), which root can still read on qualification hosts.
+		await mkdir(absolute, { recursive: true });
+		const result = await service.attachTask({
+			featureId: feature.id,
+			relativeTaskPath: relative,
+			actor: actor(),
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.reason).toBe("VALIDATION_FAILED");
 	});
 
 	test("approveAndQueue covers missing feature, project mismatch, and corrupt idempotency cache", async () => {
