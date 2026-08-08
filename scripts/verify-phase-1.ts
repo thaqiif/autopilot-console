@@ -1077,6 +1077,9 @@ export function formatSummary(summary: QualificationSummary): string {
 			`  ${mark} ${gate.name.padEnd(18)} exit=${gate.exitCode} ${gate.durationMs}ms` +
 				(gate.message ? ` — ${gate.message}` : ""),
 		);
+		if (!gate.ok && gate.outputTail) {
+			lines.push(`    output:\n${gate.outputTail}`);
+		}
 	}
 	if (!summary.ok) {
 		lines.push("");
@@ -1117,6 +1120,7 @@ async function main(): Promise<void> {
 					exitCode: g.exitCode,
 					durationMs: g.durationMs,
 					message: g.message ?? null,
+					outputTail: g.outputTail ?? null,
 				})),
 			},
 			null,
