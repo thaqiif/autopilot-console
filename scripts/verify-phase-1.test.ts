@@ -15,6 +15,7 @@ import {
 	formatSummary,
 	hasSkipSummary,
 	PHASE1_GATES,
+	runComposeStackQualification,
 	runPhase1Qualification,
 	type SpawnResult,
 } from "./verify-phase-1";
@@ -317,5 +318,58 @@ describe("runPhase1Qualification fail-closed behavior", () => {
 		const image = summary.gates.find((g) => g.name === "image");
 		expect(image?.ok).toBe(false);
 		expect(image?.message ?? "").toMatch(/missing targets|worker|migrate/i);
+	});
+});
+
+describe("runComposeStackQualification", () => {
+	test("starts from empty volumes, verifies health and recovery, then cleans up", async () => {
+		const calls: string[] = [];
+		const spawn = async (cmd: string[]): Promise<SpawnResult> => {
+			calls.push(cmd.join(" "));
+			if (cmd.includes("ps")) {
+				return {
+					exitCode: 0,
+					stdout: ["postgres", "migrate", "api", "worker", "web"]
+						.map((service) => JSON.stringify({ Service: service, Health: "healthy", State: "running" }))
+						.join("\n"),
+					stderr: "",
+				};
+			}
+			return { exitCode: 0, stdout: "phase1-compose-ok\n", stderr: "" };
+		};
+
+		const result = await runComposeStackQualification(spawn, ROOT, {
+			COMPOSE_PROJECT_NAME: "phase1-test",
+		});
+
+		expect(result.compose.ok).toBe(true);
+		expect(result.deployment.ok).toBe(true);
+		expect(calls).toContain(
+			"docker compose down --volumes --remove-orphans --timeout 10",
+		);
+		expect(calls).toContain("docker compose up -d --wait --wait-timeout 120");
+		expect(calls.some((call) => call.includes("pg_dump") && call.includes("psql"))).toBe(true);
+		expect(calls.at(-1)).toBe("docker compose down --volumes --remove-orphans --timeout 10");
+	});
+
+	test("fails both gates and still cleans up when the stack cannot become healthy", async () => {
+		const calls: string[] = [];
+		const spawn = async (cmd: string[]): Promise<SpawnResult> => {
+			const call = cmd.join(" ");
+			calls.push(call);
+			if (call.includes(" compose up ")) {
+				return { exitCode: 1, stdout: "", stderr: "worker unhealthy" };
+			}
+			return { exitCode: 0, stdout: "", stderr: "" };
+		};
+
+		const result = await runComposeStackQualification(spawn, ROOT, {
+			COMPOSE_PROJECT_NAME: "phase1-test",
+		});
+
+		expect(result.compose.ok).toBe(false);
+		expect(result.deployment.ok).toBe(false);
+		expect(result.compose.message).toMatch(/worker unhealthy|healthy/i);
+		expect(calls.at(-1)).toBe("docker compose down --volumes --remove-orphans --timeout 10");
 	});
 });
