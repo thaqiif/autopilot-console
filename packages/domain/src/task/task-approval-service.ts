@@ -223,6 +223,21 @@ async function readAndParseTaskFile(
 	return { ok: true, checksum: parsed.checksum, summary, sourceBytes: new Uint8Array(bytes) };
 }
 
+type CachedApproveResult = {
+	approval: ApprovalResult;
+	attempt: AttemptResult;
+};
+
+function readCachedApproveResult(raw: unknown): CachedApproveResult | null {
+	if (!raw || typeof raw !== "object") return null;
+	const record = raw as Record<string, unknown>;
+	if (!record.approval || !record.attempt) return null;
+	return {
+		approval: record.approval as ApprovalResult,
+		attempt: record.attempt as AttemptResult,
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
@@ -453,7 +468,7 @@ export function createTaskApprovalService(
 				WHERE operation_key = ${operationKey}
 			`;
 			if (existingIdemp.length > 0) {
-				const cached = existingIdemp[0]?.result as Record<string, unknown> | null;
+				const cached = readCachedApproveResult(existingIdemp[0]?.result);
 				const currentFeature = await getFeatureRow(sql, featureId);
 				if (!currentFeature) {
 					return { ok: false, reason: "FEATURE_NOT_FOUND", message: "Feature not found" };
@@ -465,8 +480,8 @@ export function createTaskApprovalService(
 					return {
 						ok: true,
 						feature: mapFeature(currentFeature),
-						approval: cached.approval as ApprovalResult,
-						attempt: cached.attempt as AttemptResult,
+						approval: cached.approval,
+						attempt: cached.attempt,
 						idempotent: true,
 					};
 				}
@@ -528,14 +543,14 @@ export function createTaskApprovalService(
 						WHERE operation_key = ${operationKey}
 					`;
 					if (lockedIdemp.length > 0) {
-						const cached = lockedIdemp[0]?.result as Record<string, unknown> | null;
+						const cached = readCachedApproveResult(lockedIdemp[0]?.result);
 						const current = await getFeatureRow(tx, featureId);
 						if (cached && current) {
 							return {
 								kind: "idempotent" as const,
 								feature: current,
-								approval: cached.approval as ApprovalResult,
-								attempt: cached.attempt as AttemptResult,
+								approval: cached.approval,
+								attempt: cached.attempt,
 							};
 						}
 					}
@@ -715,21 +730,18 @@ export function createTaskApprovalService(
 						SELECT result FROM idempotency_records
 						WHERE operation_key = ${operationKey}
 					`;
-					if (recheck.length > 0) {
-						const cached = recheck[0]?.result as Record<string, unknown> | null;
-						const currentFeature = await getFeatureRow(sql, featureId);
-						if (cached && currentFeature) {
-							return {
-								ok: true,
-								feature: mapFeature(currentFeature),
-								approval: cached.approval as ApprovalResult,
-								attempt: cached.attempt as AttemptResult,
-								idempotent: true,
-							};
-						}
+					const cached = readCachedApproveResult(recheck[0]?.result);
+					const currentFeature = await getFeatureRow(sql, featureId);
+					if (cached && currentFeature) {
+						return {
+							ok: true,
+							feature: mapFeature(currentFeature),
+							approval: cached.approval,
+							attempt: cached.attempt,
+							idempotent: true,
+						};
 					}
 					// Different operation key lost a uniqueness race — surface as illegal state.
-					const currentFeature = await getFeatureRow(sql, featureId);
 					return {
 						ok: false,
 						reason: "ILLEGAL_STATE",

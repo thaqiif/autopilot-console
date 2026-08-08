@@ -40,6 +40,7 @@ import {
 	type Phase1Context,
 	truncateAll,
 } from "../fixtures/phase-1-seed";
+import { waitUntil } from "../fixtures/wait-until";
 
 let ctx: Phase1Context;
 let tempDir: string;
@@ -58,20 +59,6 @@ const VALID_TASK = {
 		},
 	],
 };
-
-/** Bounded wait for a DB-visible predicate without wall-clock sleeps. */
-async function waitUntil(
-	predicate: () => Promise<boolean>,
-	label: string,
-	maxTurns = 200,
-): Promise<void> {
-	for (let i = 0; i < maxTurns; i += 1) {
-		if (await predicate()) return;
-		await Promise.resolve();
-		await new Promise((resolve) => setTimeout(resolve, 0));
-	}
-	throw new Error(`waitUntil timed out: ${label}`);
-}
 
 async function loginApi(): Promise<string> {
 	const loginResult = await ctx.api.directLogin({

@@ -10,37 +10,18 @@ import {
 import { applyCoreMigration } from "../schema/core-migration";
 import { applyWorkflowMigration } from "../schema/workflow-migration";
 import { createDatabaseFixture, type DatabaseFixture } from "../testing/database-fixture";
+import {
+	createFakeClock,
+	DATABASE_URL,
+	type FakeClock,
+	resetSchema,
+} from "../testing/test-helpers";
 import { createDevelopmentQueue, type DevelopmentQueue } from "./development-queue";
 import { createLeaseReconciler, type LeaseReconciler } from "./lease-reconciler";
-
-const DATABASE_URL =
-	process.env.DATABASE_URL ??
-	"postgres://postgres:postgres@autopilot-console-pg:5432/autopilot_console";
 
 let client: DatabaseClient;
 let sql: Sql;
 let fixture: DatabaseFixture;
-
-/** Controllable fake clock starting at a fixed epoch. */
-class FakeClock {
-	private current: number;
-
-	constructor(startIso: string) {
-		this.current = new Date(startIso).getTime();
-	}
-
-	now(): Date {
-		return new Date(this.current);
-	}
-
-	advance(ms: number): void {
-		this.current += ms;
-	}
-
-	boundNow(): () => Date {
-		return () => this.now();
-	}
-}
 
 async function seedApprovedFeature(
 	sql: Sql,
@@ -92,10 +73,7 @@ async function seedQueuedAttempt(
 beforeAll(async () => {
 	client = createDatabaseClient(DATABASE_URL);
 	sql = client.sql;
-	await sql.unsafe("DROP SCHEMA IF EXISTS public CASCADE");
-	await sql.unsafe("CREATE SCHEMA public");
-	await sql.unsafe("GRANT ALL ON SCHEMA public TO postgres");
-	await sql.unsafe("GRANT ALL ON SCHEMA public TO public");
+	await resetSchema(sql);
 	await applyCoreMigration(sql);
 	await applyWorkflowMigration(sql);
 });
@@ -148,7 +126,7 @@ describe("development queue", () => {
 	let workerId: string;
 
 	beforeEach(() => {
-		clock = new FakeClock("2026-07-18T00:00:00Z");
+		clock = createFakeClock("2026-07-18T00:00:00Z");
 		workerId = `worker-${crypto.randomUUID()}`;
 		queue = createDevelopmentQueue(sql, {
 			maxConcurrent: 4,
@@ -420,7 +398,7 @@ describe("lease reconciler", () => {
 	let reconciler: LeaseReconciler;
 
 	beforeEach(() => {
-		clock = new FakeClock("2026-07-18T00:00:00Z");
+		clock = createFakeClock("2026-07-18T00:00:00Z");
 		reconciler = createLeaseReconciler(sql, { clock: clock.boundNow() });
 	});
 
@@ -459,7 +437,7 @@ describe("lease reconciler", () => {
 
 	test("marks expired lease as INTERRUPTED and does not requeue", async () => {
 		const { attemptId } = await seedRunningAttempt(sql);
-		clock.advance(60_000);
+		clock.advanceMs(60_000);
 
 		const count = await reconciler.interruptExpiredLeases();
 		expect(count).toBe(1);
@@ -470,7 +448,7 @@ describe("lease reconciler", () => {
 
 	test("does not mark non-expired leases", async () => {
 		const { attemptId } = await seedRunningAttempt(sql);
-		clock.advance(15_000);
+		clock.advanceMs(15_000);
 
 		const count = await reconciler.interruptExpiredLeases();
 		expect(count).toBe(0);
@@ -500,7 +478,7 @@ describe("lease reconciler", () => {
 			heartbeatAt: clock.now(),
 		});
 
-		clock.advance(60_000);
+		clock.advanceMs(60_000);
 
 		const count = await reconciler.interruptExpiredLeases();
 		expect(count).toBe(2);
@@ -526,7 +504,7 @@ describe("lease reconciler", () => {
 			leaseExpiresAt: new Date(clock.now().getTime() - 60_000),
 		});
 
-		clock.advance(60_000);
+		clock.advanceMs(60_000);
 
 		const count = await reconciler.interruptExpiredLeases();
 		expect(count).toBe(0);

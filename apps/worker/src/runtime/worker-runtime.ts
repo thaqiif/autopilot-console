@@ -123,22 +123,20 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
 		publishActive();
 
 		while (!signal.aborted) {
-			const now = Date.now();
-			if (now - lastHeartbeat >= heartbeatIntervalMs) {
+			if (Date.now() - lastHeartbeat >= heartbeatIntervalMs) {
 				await options.heartbeat(active);
-				lastHeartbeat = now;
+				lastHeartbeat = Date.now();
 			}
 
 			const fill = await fillSlots();
 			if (signal.aborted) break;
-
-			if (fill === "idle" || fill === "full") {
+			// Idle/full: wait before re-polling. Started: loop immediately to fill remaining slots.
+			if (fill !== "started") {
 				await sleep(idlePollMs, signal);
 			}
-			// When work started, loop immediately so remaining free slots fill without delay.
 		}
 
-		// Wait for in-flight jobs so ownership cleanup stays deterministic on shutdown.
+		// Deterministic shutdown: drain in-flight ownership before returning.
 		if (activeByAttempt.size > 0) {
 			await Promise.allSettled([...activeByAttempt.values()]);
 		}

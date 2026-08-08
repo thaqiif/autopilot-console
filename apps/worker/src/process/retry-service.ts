@@ -5,12 +5,12 @@ import {
 	createDevelopmentAttempt,
 	createIdempotencyRecord,
 	type DevelopmentAttemptRow,
-	type FeatureRow,
 	type FeatureState,
 	getDevelopmentAttempt,
 	getFeatureById,
-	type Queryable,
+	type Sql,
 } from "../../../../packages/database/src/index";
+import { applyFeatureTransition } from "../../../../packages/domain/src/index";
 
 // ---------------------------------------------------------------------------
 // Ports
@@ -40,7 +40,7 @@ export interface RetryService {
 // ---------------------------------------------------------------------------
 
 export interface RetryServiceOptions {
-	sql: Queryable;
+	sql: Sql;
 	autopilot?: AutopilotRunner;
 	now?: () => Date;
 }
@@ -64,54 +64,83 @@ export function createRetryService(options: RetryServiceOptions): RetryService {
 	return { retry };
 
 	async function retry(request: RetryRequest): Promise<RetryOutcome> {
-		// Idempotency check via idempotency_records table
-		const idempotencyRows = await sql`
-			SELECT attempt_id FROM idempotency_records WHERE operation_key = ${request.operationKey}
-		`;
-		if (idempotencyRows.length > 0) {
-			const priorAttemptId = idempotencyRows[0]?.attempt_id as string | undefined;
-			if (priorAttemptId) {
-				const priorAttempt = await getDevelopmentAttempt(sql, priorAttemptId);
-				if (priorAttempt) return { kind: "idempotent", attempt: priorAttempt };
+		return sql.begin(async (tx) => {
+			// Serialize a globally unique operation key before checking its durable result.
+			await tx`SELECT pg_advisory_xact_lock(hashtextextended(${request.operationKey}, 0))`;
+			const [idempotency] = await tx`
+				SELECT project_id, feature_id, attempt_id
+				FROM idempotency_records
+				WHERE operation_key = ${request.operationKey}
+			`;
+			if (idempotency) {
+				if (
+					idempotency.project_id !== request.projectId ||
+					idempotency.feature_id !== request.featureId
+				) {
+					return {
+						kind: "blocked",
+						reason: "Operation key is already associated with another retry.",
+					};
+				}
+				const priorAttemptId = idempotency.attempt_id as string | null;
+				const priorAttempt = priorAttemptId
+					? await getDevelopmentAttempt(tx, priorAttemptId)
+					: null;
+				if (!priorAttempt) {
+					return { kind: "blocked", reason: "Prior retry attempt was not found." };
+				}
+				return { kind: "idempotent", attempt: priorAttempt };
 			}
-		}
 
-		const feature = await getFeatureById(sql, request.featureId);
-		if (!feature) return { kind: "blocked", reason: "Feature not found." };
+			await tx`SELECT id FROM features WHERE id = ${request.featureId} FOR UPDATE`;
+			const feature = await getFeatureById(tx, request.featureId);
+			if (!feature) return { kind: "blocked", reason: "Feature not found." };
+			if (feature.projectId !== request.projectId) {
+				return { kind: "blocked", reason: "Feature does not belong to the requested project." };
+			}
 
-		if (!RETRYABLE_FEATURE_STATES.includes(feature.state as FeatureState)) {
-			return { kind: "blocked", reason: `Feature state ${feature.state} is not retryable.` };
-		}
+			if (!RETRYABLE_FEATURE_STATES.includes(feature.state as FeatureState)) {
+				return { kind: "blocked", reason: `Feature state ${feature.state} is not retryable.` };
+			}
 
-		// Find latest attempt for this feature
-		const latestRows = await sql`
-			SELECT id FROM development_job_attempts
-			WHERE feature_id = ${request.featureId}
-			ORDER BY enqueued_at DESC
-			LIMIT 1
-		`;
-		const firstRow = latestRows[0];
-		if (!firstRow) return { kind: "blocked", reason: "No existing attempt found." };
-		const latest = await getDevelopmentAttempt(sql, firstRow.id as string);
-		if (!latest) return { kind: "blocked", reason: "No existing attempt found." };
+			const [approval] = await tx`
+				SELECT id FROM task_approvals
+				WHERE id = ${request.taskApprovalId}
+					AND project_id = ${request.projectId}
+					AND feature_id = ${request.featureId}
+					AND invalidated_at IS NULL
+				FOR SHARE
+			`;
+			if (!approval) {
+				return { kind: "blocked", reason: "An active task approval was not found." };
+			}
 
-		if (!(RETRYABLE_ATTEMPT_STATUSES as readonly string[]).includes(latest.status)) {
-			return { kind: "blocked", reason: `Attempt status ${latest.status} is not retryable.` };
-		}
+			const [latestRow] = await tx`
+				SELECT id FROM development_job_attempts
+				WHERE feature_id = ${request.featureId}
+				ORDER BY enqueued_at DESC, created_at DESC, id DESC
+				LIMIT 1
+				FOR UPDATE
+			`;
+			if (!latestRow) return { kind: "blocked", reason: "No existing attempt found." };
+			const latest = await getDevelopmentAttempt(tx, latestRow.id as string);
+			if (!latest) return { kind: "blocked", reason: "No existing attempt found." };
 
-		if (latest.branchName !== feature.branchName) {
-			return { kind: "blocked", reason: "Branch mismatch between attempt and feature." };
-		}
+			if (!(RETRYABLE_ATTEMPT_STATUSES as readonly string[]).includes(latest.status)) {
+				return { kind: "blocked", reason: `Attempt status ${latest.status} is not retryable.` };
+			}
 
-		// Liveness check: if process identity exists, verify no active process
-		if (latest.processPid !== null && latest.processStartIdentity !== null) {
-			if (autopilot) {
+			if (latest.branchName !== feature.branchName || request.branchName !== feature.branchName) {
+				return { kind: "blocked", reason: "Branch mismatch between attempt and feature." };
+			}
+
+			if (latest.processPid !== null && latest.processStartIdentity !== null && autopilot) {
 				const alive = await autopilot.isAlive({
 					projectId: request.projectId,
 					featureId: request.featureId,
 					projectRoot: "",
 					taskRelativePath: "",
-					expectedBranch: feature.branchName ?? "",
+					expectedBranch: feature.branchName,
 					processIdentity: {
 						pid: latest.processPid,
 						startTimeMs: Number(latest.processStartIdentity),
@@ -122,49 +151,92 @@ export function createRetryService(options: RetryServiceOptions): RetryService {
 					return { kind: "blocked", reason: "Process may still be active; retry is unsafe." };
 				}
 			}
-			// ponytail: add OS-level process liveness check via ProcessTreeInspector when integrated
-		}
 
-		const retryAttempt = await createDevelopmentAttempt(sql, {
-			projectId: request.projectId,
-			featureId: request.featureId,
-			taskApprovalId: request.taskApprovalId,
-			branchName: feature.branchName ?? request.branchName,
-			operationKey: request.operationKey,
-			status: "QUEUED",
-			predecessorAttemptId: latest.id,
+			const transition = applyFeatureTransition(
+				{
+					featureId: feature.id,
+					from: feature.state,
+					to: "QUEUED",
+					owner: "human",
+					cause: "development_retry",
+					operationId: request.operationKey,
+					expectedVersion: feature.rowVersion,
+					currentVersion: feature.rowVersion,
+					observedState: feature.state,
+				},
+				{ now },
+			);
+			if (transition.kind !== "applied") {
+				return {
+					kind: "blocked",
+					reason:
+						transition.kind === "rejected"
+							? transition.message
+							: "Retry transition was already applied.",
+				};
+			}
+			const updated = await tx`
+				UPDATE features
+				SET state = ${transition.nextState},
+					row_version = ${transition.nextVersion},
+					updated_at = now()
+				WHERE id = ${feature.id}
+					AND state = ${transition.priorState}
+					AND row_version = ${transition.priorVersion}
+				RETURNING id
+			`;
+			if (!updated[0]) return { kind: "blocked", reason: "Feature changed while retrying." };
+
+			const retryAttempt = await createDevelopmentAttempt(tx, {
+				projectId: request.projectId,
+				featureId: request.featureId,
+				taskApprovalId: request.taskApprovalId,
+				branchName: feature.branchName,
+				operationKey: request.operationKey,
+				status: "QUEUED",
+				predecessorAttemptId: latest.id,
+			});
+
+			await createIdempotencyRecord(tx, {
+				operationKey: request.operationKey,
+				projectId: request.projectId,
+				featureId: request.featureId,
+				attemptId: retryAttempt.id,
+				result: { kind: "retried", attemptId: retryAttempt.id },
+			});
+
+			await appendActivityEvent(tx, {
+				projectId: request.projectId,
+				featureId: request.featureId,
+				attemptId: retryAttempt.id,
+				type: "development.retried",
+				summary: `Development retry queued: ${request.reason || "explicit retry"}`,
+				source: "api",
+			});
+
+			await appendAuditEvent(tx, {
+				actorType: "administrator",
+				actorId: request.actorId,
+				action: "development.retry",
+				targetType: "development_attempt",
+				targetId: retryAttempt.id,
+				projectId: request.projectId,
+				featureId: request.featureId,
+				attemptId: retryAttempt.id,
+				result: "success",
+				priorValues: {
+					state: transition.priorState,
+					predecessorAttemptId: latest.id,
+					branchName: feature.branchName,
+				},
+				nextValues: {
+					state: transition.nextState,
+					attemptId: retryAttempt.id,
+					status: "QUEUED",
+				},
+			});
+
+			return { kind: "retried", attempt: retryAttempt };
 		});
-
-		await createIdempotencyRecord(sql, {
-			operationKey: request.operationKey,
-			projectId: request.projectId,
-			featureId: request.featureId,
-			attemptId: retryAttempt.id,
-			result: { kind: "retried", attemptId: retryAttempt.id },
-		});
-
-		await appendActivityEvent(sql, {
-			projectId: request.projectId,
-			featureId: request.featureId,
-			attemptId: retryAttempt.id,
-			type: "development.retried",
-			summary: `Development retry queued: ${request.reason || "explicit retry"}`,
-			source: "api",
-		});
-
-		await appendAuditEvent(sql, {
-			actorType: "administrator",
-			actorId: request.actorId,
-			action: "development.retry",
-			targetType: "development_attempt",
-			targetId: retryAttempt.id,
-			projectId: request.projectId,
-			featureId: request.featureId,
-			result: "success",
-			priorValues: { predecessorAttemptId: latest.id, branchName: feature.branchName },
-			nextValues: { attemptId: retryAttempt.id, status: "QUEUED" },
-		});
-
-		return { kind: "retried", attempt: retryAttempt };
 	}
 }

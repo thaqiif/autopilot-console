@@ -117,7 +117,7 @@ export interface PRHandoffWorkerOptions {
 }
 
 export function createPRHandoffWorker(options: PRHandoffWorkerOptions): PRHandoffWorker {
-	const { store, git, github, workerId, remoteName = "origin", now = () => new Date() } = options;
+	const { store, git, github, remoteName = "origin" } = options;
 
 	return {
 		async handoff(attemptId: string): Promise<PRHandoffOutcome> {
