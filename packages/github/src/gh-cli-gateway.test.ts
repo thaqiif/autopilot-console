@@ -4,6 +4,9 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 // Implementation under test — imported after tests define expected surface.
 // Will fail to resolve methods until Green.
 import { GhCliGateway } from "./gh-cli-gateway";
@@ -598,5 +601,277 @@ describe("no approve or merge operations", () => {
 			expect(c.argv.join(" ")).not.toMatch(/\bpr merge\b/);
 			expect(c.argv.join(" ")).not.toMatch(/\bpr review\b/);
 		}
+	});
+});
+
+describe("adapter branch behavior", () => {
+	test("default construction is supported without eagerly spawning gh", () => {
+		const gw = new GhCliGateway();
+		expect(typeof gw.validateAuthentication).toBe("function");
+	});
+
+	test("authentication rejects malformed successful output", async () => {
+		const { gw, fake } = gateway();
+		fake.enqueue(textResponse("not-json", 0));
+		expect(await gw.validateAuthentication()).toEqual({
+			ok: false,
+			authenticated: false,
+			login: null,
+		});
+	});
+
+	test("repository validation rejects missing and inconsistent identities", async () => {
+		const { gw } = gateway();
+		await expect(
+			gw.validateAccess({
+				repository: { owner: "", repository: "widget", fullName: "acme/widget" },
+			}),
+		).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+		await expect(
+			gw.validateAccess({
+				repository: { owner: "acme", repository: "widget", fullName: "other/widget" },
+			}),
+		).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+	});
+
+	test.each([
+		["READ", false],
+		["TRIAGE", false],
+		["ADMIN", true],
+		["MAINTAIN", true],
+		[undefined, null],
+	] as const)(
+		"maps viewer permission %s to push feasibility",
+		async (viewerPermission, expected) => {
+			const { gw, fake } = gateway();
+			fake.enqueue(
+				jsonResponse({
+					hosts: {
+						"github.com": {
+							accounts: { alice: { state: "success" } },
+							activeAccount: "alice",
+						},
+					},
+				}),
+				jsonResponse({ name: "widget", owner: { login: "acme" }, viewerPermission }),
+			);
+			const result = await gw.validateAccess({ repository: repo });
+			expect(result.ok).toBe(true);
+			expect(result.pushFeasible).toBe(expected);
+		},
+	);
+
+	test("repository identity mismatch and malformed JSON are safe access failures", async () => {
+		for (const repoResult of [
+			jsonResponse({ name: "different", owner: { login: "acme" }, viewerPermission: "WRITE" }),
+			textResponse("not-json", 0),
+		]) {
+			const { gw, fake } = gateway();
+			fake.enqueue(
+				jsonResponse({
+					hosts: {
+						"github.com": {
+							accounts: { alice: { state: "success" } },
+							activeAccount: "alice",
+						},
+					},
+				}),
+				repoResult,
+			);
+			const result = await gw.validateAccess({ repository: repo });
+			expect(result.ok).toBe(false);
+			expect(result.repositoryReadable).toBe(false);
+			expect(result.failures[0]?.code).toBe("REPOSITORY_ACCESS_DENIED");
+		}
+	});
+
+	test("repository probe supplies a safe fallback when gh has no stderr", async () => {
+		const { gw, fake } = gateway();
+		fake.enqueue(
+			jsonResponse({
+				hosts: {
+					"github.com": {
+						accounts: { alice: { state: "success" } },
+						activeAccount: "alice",
+					},
+				},
+			}),
+			textResponse("", 1),
+		);
+		const result = await gw.validateAccess({ repository: repo });
+		expect(result.failures[0]).toEqual({
+			code: "REPOSITORY_ACCESS_DENIED",
+			message: "repository not readable",
+		});
+	});
+
+	test("find validates branches and normalizes empty and failed list responses", async () => {
+		const { gw, fake } = gateway();
+		await expect(
+			gw.findExistingPullRequest({
+				repository: repo,
+				headBranch: "",
+				baseBranch: "main",
+			}),
+		).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+
+		fake.enqueue(textResponse("", 0), textResponse("", 0), textResponse("", 0));
+		expect(
+			await gw.findExistingPullRequest({
+				repository: repo,
+				headBranch: "feature/demo",
+				baseBranch: "main",
+			}),
+		).toBeNull();
+
+		const failed = gateway();
+		failed.fake.enqueue(errorResponse("list denied", 2));
+		await expect(
+			failed.gw.findExistingPullRequest({
+				repository: repo,
+				headBranch: "feature/demo",
+				baseBranch: "main",
+				state: "open",
+			}),
+		).rejects.toMatchObject({ code: "ADAPTER_ERROR" });
+	});
+
+	test("find rejects malformed JSON from a successful gh list", async () => {
+		const { gw, fake } = gateway();
+		fake.enqueue(textResponse("not-json", 0));
+		await expect(
+			gw.findExistingPullRequest({
+				repository: repo,
+				headBranch: "feature/demo",
+				baseBranch: "main",
+				state: "open",
+			}),
+		).rejects.toMatchObject({ code: "ADAPTER_ERROR" });
+	});
+
+	test("create validates inputs, defaults body, and falls back to head for view", async () => {
+		const invalid = gateway().gw;
+		await expect(
+			invalid.createPullRequest({
+				repository: repo,
+				headBranch: "",
+				baseBranch: "main",
+				title: "title",
+				body: "",
+			}),
+		).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+		await expect(
+			invalid.createPullRequest({
+				repository: repo,
+				headBranch: "feature/demo",
+				baseBranch: "main",
+				title: "   ",
+				body: "",
+			}),
+		).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+
+		const { gw, fake } = gateway();
+		fake.enqueue(
+			textResponse("", 0),
+			jsonResponse({
+				number: 8,
+				url: "https://github.com/acme/widget/pull/8",
+				headRefName: "feature/demo",
+				baseRefName: "main",
+				headRefOid: "A".repeat(40),
+				state: "OPEN",
+				title: "title",
+			}),
+		);
+		const created = await gw.createPullRequest({
+			repository: repo,
+			headBranch: "feature/demo",
+			baseBranch: "main",
+			title: "title",
+			body: "",
+		});
+		expect(created.number).toBe(8);
+		expect(fake.calls[0]?.argv.at(-1)).toBe("");
+		expect(fake.calls[1]?.argv).toContain("feature/demo");
+	});
+
+	test("create and status surface nonzero gh view exits", async () => {
+		const create = gateway();
+		create.fake.enqueue(textResponse("created", 0), errorResponse("view denied", 3));
+		await expect(
+			create.gw.createPullRequest({
+				repository: repo,
+				headBranch: "feature/demo",
+				baseBranch: "main",
+				title: "title",
+				body: "",
+			}),
+		).rejects.toMatchObject({ code: "ADAPTER_ERROR" });
+
+		const status = gateway();
+		status.fake.enqueue(errorResponse("view denied", 4));
+		await expect(
+			status.gw.getPullRequestStatus({ repository: repo, number: 1 }),
+		).rejects.toMatchObject({ code: "ADAPTER_ERROR" });
+	});
+
+	test("status rejects non-positive and non-integral pull request numbers", async () => {
+		const { gw } = gateway();
+		for (const number of [0, -1, 1.5, Number.NaN]) {
+			await expect(gw.getPullRequestStatus({ repository: repo, number })).rejects.toMatchObject({
+				code: "VALIDATION_FAILED",
+			});
+		}
+	});
+});
+
+describe("default spawn runner (executablePath)", () => {
+	test("spawns real executable without a shell and surfaces successful JSON", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "gh-cli-default-"));
+		const exe = join(dir, "fake-gh");
+		// Bun script avoids bash JSON-quoting pitfalls while still exercising spawnSync.
+		const script = [
+			"#!/usr/bin/env bun",
+			"const argv = process.argv.slice(2);",
+			'const joined = argv.join(" ");',
+			"if (/[;&|`$]/.test(joined)) process.exit(99);",
+			'if (argv.includes("auth") && argv.includes("status")) {',
+			"  process.stdout.write(",
+			"    JSON.stringify({",
+			'      hosts: { "github.com": { accounts: { alice: { state: "success" } }, activeAccount: "alice" } },',
+			'    }) + "\\n",',
+			"  );",
+			"  process.exit(0);",
+			"}",
+			'if (argv.includes("repo") && argv.includes("view")) {',
+			"  process.stdout.write(",
+			'    JSON.stringify({ name: "widget", owner: { login: "acme" }, viewerPermission: "WRITE" }) + "\\n",',
+			"  );",
+			"  process.exit(0);",
+			"}",
+			'process.stderr.write("unexpected argv: " + joined + "\\n");',
+			"process.exit(2);",
+			"",
+		].join("\n");
+		await writeFile(exe, script, { mode: 0o755 });
+		try {
+			const gw = new GhCliGateway({ executablePath: exe });
+			const result = await gw.validateAccess({ repository: repo });
+			expect(result.ok).toBe(true);
+			expect(result.authenticated).toBe(true);
+			expect(result.login).toBe("alice");
+			expect(result.repositoryReadable).toBe(true);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("spawn failure for missing executable is normalized as ADAPTER_ERROR", async () => {
+		const gw = new GhCliGateway({
+			executablePath: "/nonexistent/path/to/gh-binary-that-does-not-exist",
+		});
+		await expect(gw.validateAuthentication()).rejects.toMatchObject({
+			code: "ADAPTER_ERROR",
+		});
 	});
 });

@@ -78,6 +78,37 @@ describe("canonicalizeWorkspacePath", () => {
 		expect(String(result)).toBe(rootReal);
 	});
 
+	test("uses default root-equality policy and ignores blank or inaccessible roots", async () => {
+		const root = await makeTempDir("ws-root-");
+		const project = join(root, "project");
+		await mkdir(project);
+
+		const result = await canonicalizeWorkspacePath(project, ["  ", "/definitely/missing", root]);
+		expect(String(result)).toBe(await realpath(project));
+		await expect(canonicalizeWorkspacePath(root, [root])).rejects.toMatchObject({
+			code: errorCodes.VALIDATION_FAILED,
+		});
+	});
+
+	test("rejects files and an allowlist containing only blank or inaccessible roots", async () => {
+		const root = await makeTempDir("ws-root-");
+		const file = join(root, "not-a-directory");
+		await Bun.write(file, "content");
+
+		await expect(canonicalizeWorkspacePath(file, [root])).rejects.toMatchObject({
+			code: errorCodes.VALIDATION_FAILED,
+			message: expect.stringMatching(/directory/i),
+		});
+		await expect(
+			canonicalizeWorkspacePath(root, ["  ", "/definitely/missing"], {
+				allowRootEquality: true,
+			}),
+		).rejects.toMatchObject({
+			code: errorCodes.VALIDATION_FAILED,
+			message: expect.stringMatching(/resolvable/i),
+		});
+	});
+
 	test("rejects prefix-collision tricks (similarly-prefixed sibling directory)", async () => {
 		const base = await makeTempDir("ws-base-");
 		const allowed = join(base, "workspaces");
@@ -172,6 +203,11 @@ describe("isPathInsideRoot", () => {
 		expect(isPathInsideRoot("/var/workspaces", "/var/workspaces")).toBe(true);
 		expect(isPathInsideRoot("/var/workspaces-evil/proj", "/var/workspaces")).toBe(false);
 		expect(isPathInsideRoot("/var/workspac", "/var/workspaces")).toBe(false);
+	});
+
+	test("supports roots that already include a trailing separator", () => {
+		expect(isPathInsideRoot("/var/workspaces/project", "/var/workspaces/")).toBe(true);
+		expect(isPathInsideRoot("/var/workspaces-evil", "/var/workspaces/")).toBe(false);
 	});
 });
 

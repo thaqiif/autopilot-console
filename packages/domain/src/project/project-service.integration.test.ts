@@ -714,6 +714,196 @@ describe("validation result type export", () => {
 });
 
 describe("requirement 47 project coverage edges", () => {
+	test("reports indeterminate validation details and gateway exceptions", async () => {
+		const defaultClockService = createProjectService({
+			sql,
+			workspaceRoots: [workspaceRoot],
+			git: createFakeGit(),
+			github: createFakeGithub(),
+			autopilot: createFakeAutopilot(),
+		});
+		const defaultClockValidation = await defaultClockService.validateProject({
+			name: "Default clock",
+			slug: "default-clock",
+			githubOwner: "acme",
+			githubRepo: "default-clock",
+			workspacePath: projectDir,
+			developmentBranch: "main",
+		});
+		expect(defaultClockValidation.ok).toBe(true);
+
+		const unrelatedFailure = makeService({
+			git: createFakeGit({
+				preflight: (request) =>
+					okPreflight(request, {
+						ok: false,
+						failures: [{ code: "DIRTY_WORKTREE", message: "dirty" }],
+					}),
+			}),
+			github: createFakeGithub({
+				validateAccess: () => ({
+					ok: false,
+					authenticated: true,
+					login: null,
+					repositoryReadable: true,
+					pushFeasible: null,
+					failures: [],
+				}),
+			}),
+			autopilot: createFakeAutopilot({ runtime: { ok: false, message: "" } }),
+		});
+		const indeterminate = await unrelatedFailure.validateProject({
+			name: "Indeterminate",
+			slug: "indeterminate",
+			githubOwner: "acme",
+			githubRepo: "indeterminate",
+			workspacePath: projectDir,
+			developmentBranch: "main",
+		});
+		expect(indeterminate.ok).toBe(false);
+		expect(indeterminate.checks.find((item) => item.code === "GIT_REPOSITORY")?.message).toBe(
+			"Path is not a Git worktree",
+		);
+		expect(indeterminate.checks.find((item) => item.code === "AUTOPILOT_RUNTIME")?.message).toBe(
+			"Autopilot runtime unavailable",
+		);
+		expect(indeterminate.checks.find((item) => item.code === "PUSH_FEASIBILITY")?.message).toBe(
+			"Push feasibility could not be determined",
+		);
+
+		const throwing = makeService({
+			autopilot: {
+				...createFakeAutopilot(),
+				async validateRuntime() {
+					throw "runtime unavailable";
+				},
+			},
+			github: createFakeGithub({
+				validateAccess: async () => {
+					throw "github unavailable";
+				},
+			}),
+		});
+		const failed = await throwing.validateProject({
+			name: "Throwing gateways",
+			slug: "throwing-gateways",
+			githubOwner: "acme",
+			githubRepo: "throwing-gateways",
+			workspacePath: projectDir,
+			developmentBranch: "main",
+		});
+		expect(failed.ok).toBe(false);
+		expect(failed.checks.find((item) => item.code === "AUTOPILOT_RUNTIME")?.message).toBe(
+			"Autopilot runtime check failed",
+		);
+		expect(failed.checks.find((item) => item.code === "GH_AUTHENTICATION")?.message).toBe(
+			"GitHub access check failed",
+		);
+	});
+
+	test("rejects each active-project uniqueness key", async () => {
+		const service = makeService();
+		const created = await service.createProject({
+			workspaceId,
+			name: "Unique Base",
+			slug: "unique-base",
+			githubOwner: "acme",
+			githubRepo: "unique-base",
+			workspacePath: projectDir,
+			developmentBranch: "main",
+			actor: ACTOR,
+		});
+		if (!created.ok) throw new Error("create failed");
+		const otherDir = join(workspaceRoot, `unique-${crypto.randomUUID()}`);
+		await mkdir(otherDir, { recursive: true });
+
+		const duplicateName = await service.createProject({
+			workspaceId,
+			name: "Unique Base",
+			slug: "another-slug",
+			githubOwner: "acme",
+			githubRepo: "another-repo",
+			workspacePath: otherDir,
+			developmentBranch: "main",
+			actor: ACTOR,
+		});
+		expect(duplicateName.ok).toBe(false);
+
+		const duplicateGithub = await service.createProject({
+			workspaceId,
+			name: "Another Name",
+			slug: "another-project",
+			githubOwner: "acme",
+			githubRepo: "unique-base",
+			workspacePath: otherDir,
+			developmentBranch: "main",
+			actor: ACTOR,
+		});
+		expect(duplicateGithub.ok).toBe(false);
+	});
+
+	test("rejects archived updates and invalid or conflicting protected updates", async () => {
+		const service = makeService();
+		const first = await service.createProject({
+			workspaceId,
+			name: "First",
+			slug: "first",
+			githubOwner: "acme",
+			githubRepo: "first",
+			workspacePath: projectDir,
+			developmentBranch: "main",
+			actor: ACTOR,
+		});
+		if (!first.ok) throw new Error("create failed");
+		const secondDir = join(workspaceRoot, `second-${crypto.randomUUID()}`);
+		await mkdir(secondDir, { recursive: true });
+		const second = await service.createProject({
+			workspaceId,
+			name: "Second",
+			slug: "second",
+			githubOwner: "acme",
+			githubRepo: "second",
+			workspacePath: secondDir,
+			developmentBranch: "main",
+			actor: ACTOR,
+		});
+		if (!second.ok) throw new Error("create failed");
+
+		const invalidIdentity = await service.updateProject({
+			projectId: first.project.id,
+			githubOwner: " ",
+			actor: ACTOR,
+		});
+		expect(invalidIdentity.ok).toBe(false);
+		const invalidPath = await service.updateProject({
+			projectId: first.project.id,
+			workspacePath: "/outside/allowlist",
+			actor: ACTOR,
+		});
+		expect(invalidPath.ok).toBe(false);
+		const conflictingName = await service.updateProject({
+			projectId: first.project.id,
+			name: second.project.name,
+			actor: ACTOR,
+		});
+		expect(conflictingName.ok).toBe(false);
+
+		const archived = await service.archiveProject({ projectId: first.project.id, actor: ACTOR });
+		expect(archived.ok).toBe(true);
+		const updateArchived = await service.updateProject({
+			projectId: first.project.id,
+			name: "No longer active",
+			actor: ACTOR,
+		});
+		expect(updateArchived.ok).toBe(false);
+		if (!updateArchived.ok) expect(updateArchived.reason).toBe("ALREADY_ARCHIVED");
+		const archiveAgain = await service.archiveProject({
+			projectId: first.project.id,
+			actor: ACTOR,
+		});
+		expect(archiveAgain.ok).toBe(false);
+	});
+
 	test("validate rejects invalid repository identity and empty workspace roots path", async () => {
 		const service = makeService();
 		const invalidRepo = await service.validateProject({

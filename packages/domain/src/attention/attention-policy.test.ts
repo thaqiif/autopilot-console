@@ -121,6 +121,13 @@ describe("deriveAttention", () => {
 		expect(item?.ageBasis).toBe("2026-07-18T02:00:00.000Z");
 	});
 
+	test("stale GitHub sync falls back to the state-change time when staleSince is absent", () => {
+		const item = deriveAttention(input("CI_RUNNING", { staleGithubSync: true }));
+
+		expect(item?.ageBasis).toBe(BASE.stateChangedAt);
+		expect(item?.releaseId).toBe(BASE.releaseId);
+	});
+
 	test("lifecycle attention wins over stale flag when both apply", () => {
 		const item = deriveAttention(
 			input("CI_FAILED", {

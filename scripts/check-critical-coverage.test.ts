@@ -47,6 +47,19 @@ All files                                                  |   89.46 |   90.29 |
  0 skip
 `;
 
+function branchCoverageOutput(lowModules: string[] = []): string {
+	const files = Object.fromEntries(
+		[...parseBunTextCoverage(SAMPLE_TABLE).keys()].map((filePath) => [
+			filePath,
+			{
+				branchMap: { 0: { type: "if", locations: [{}, {}] } },
+				b: { 0: lowModules.includes(filePath) ? [1, 0] : [1, 1] },
+			},
+		]),
+	);
+	return `---PHASE1_BRANCH_COVERAGE_JSON---\n${JSON.stringify(files)}\n---END_PHASE1_BRANCH_COVERAGE_JSON---`;
+}
+
 describe("critical module manifest", () => {
 	test("lists domain, queue, path-security, process-control, and adapter modules explicitly", () => {
 		const categories = new Set(CRITICAL_MODULES.map((m) => m.category));
@@ -88,9 +101,14 @@ describe("parseIstanbulBranchCoverage", () => {
 					},
 					b: { 0: [3, 2], 1: [1, 0] },
 				},
+				"/repo/packages/git/src/cli-git-gateway.ts": {
+					branchMap: {},
+					b: {},
+				},
 			}),
 		);
 		expect(coverage.get("/repo/packages/domain/src/feature/feature-state-machine.ts")).toBe(75);
+		expect(coverage.get("/repo/packages/git/src/cli-git-gateway.ts")).toBe(100);
 		expect(() => parseIstanbulBranchCoverage(SAMPLE_TABLE)).toThrow(/branch coverage/i);
 	});
 });
@@ -143,26 +161,24 @@ describe("runCriticalCoverageGate failure modes", () => {
 		});
 		expect(result.ok).toBe(false);
 		expect(result.exitCode).toBe(1);
-		expect(result.messages.some((m) => /No coverage data/i.test(m))).toBe(true);
+		expect(result.messages.some((m) => /branch coverage/i.test(m))).toBe(true);
 	});
 
 	test("skipped critical tests fail the gate even when modules meet threshold", async () => {
-		const passingTable = SAMPLE_TABLE.replace("84.25", "95.00").replace("89.93", "95.00");
 		const result = await runCriticalCoverageGate({
 			skipFixtureCheck: true,
 			dryRunExitCode: 0,
-			dryRunCoverageOutput: `${passingTable}\n(skip) critical process fixture\n 1 skip\n`,
+			dryRunCoverageOutput: `${branchCoverageOutput()}\n(skip) critical process fixture\n 1 skip\n`,
 		});
 		expect(result.ok).toBe(false);
 		expect(result.messages.some((m) => /Skipped critical tests/i.test(m))).toBe(true);
 	});
 
 	test("non-zero suite exit fails the gate", async () => {
-		const passingTable = SAMPLE_TABLE.replace("84.25", "95.00").replace("89.93", "95.00");
 		const result = await runCriticalCoverageGate({
 			skipFixtureCheck: true,
 			dryRunExitCode: 1,
-			dryRunCoverageOutput: `${passingTable}\n 1 fail\n`,
+			dryRunCoverageOutput: `${branchCoverageOutput()}\n 1 fail\n`,
 		});
 		expect(result.ok).toBe(false);
 		expect(result.messages.some((m) => /exited with code 1/i.test(m))).toBe(true);
@@ -180,11 +196,10 @@ describe("runCriticalCoverageGate failure modes", () => {
 	});
 
 	test("all modules above threshold with clean suite pass", async () => {
-		const passingTable = SAMPLE_TABLE.replace("84.25", "95.00").replace("89.93", "95.00");
 		const result = await runCriticalCoverageGate({
 			skipFixtureCheck: true,
 			dryRunExitCode: 0,
-			dryRunCoverageOutput: `${passingTable}\n 0 skip\n 0 fail\n`,
+			dryRunCoverageOutput: `${branchCoverageOutput()}\n 0 skip\n 0 fail\n`,
 		});
 		expect(result.ok).toBe(true);
 		expect(result.exitCode).toBe(0);

@@ -14,17 +14,15 @@ import {
 	createProject,
 	createTaskApproval,
 	createWorkspace,
+	DATABASE_URL,
 	type DatabaseClient,
+	resetSchema,
 	type Sql,
 } from "../../../database/src/index";
 import { generateFeatureBranch } from "../../../shared/src/git/feature-branch";
 import { createFeatureService, type FeatureService } from "../feature/feature-service";
 import type { ProjectActor } from "../project/project";
 import { createReleaseService, type ReleaseService } from "./release-service";
-
-const DATABASE_URL =
-	process.env.DATABASE_URL ??
-	"postgres://postgres:postgres@autopilot-console-pg:5432/autopilot_console";
 
 let client: DatabaseClient;
 let sql: Sql;
@@ -75,10 +73,7 @@ async function seedActiveJobForRelease(projectId: string, featureId: string, bra
 beforeAll(async () => {
 	client = createDatabaseClient(DATABASE_URL);
 	sql = client.sql;
-	await sql.unsafe("DROP SCHEMA IF EXISTS public CASCADE");
-	await sql.unsafe("CREATE SCHEMA public");
-	await sql.unsafe("GRANT ALL ON SCHEMA public TO postgres");
-	await sql.unsafe("GRANT ALL ON SCHEMA public TO public");
+	await resetSchema(sql);
 	await applyCoreMigration(sql);
 	await applyWorkflowMigration(sql);
 });
@@ -580,5 +575,132 @@ describe("activity and audit atomicity", () => {
 		`;
 		expect(audits.some((a) => a.action === "release.update" && a.result === "success")).toBe(true);
 		expect(audits.some((a) => a.action === "release.update" && a.result === "rejected")).toBe(true);
+	});
+});
+
+describe("requirement 47 coverage edges", () => {
+	test("supports explicit ordering, default clock, and partial release updates", async () => {
+		const defaultClockService = createReleaseService({ sql });
+		const created = await defaultClockService.createRelease({
+			projectId: projectAId,
+			name: "Explicit order",
+			version: "3.0.0",
+			sortOrder: 42,
+			actor: ACTOR,
+		});
+		expect(created.ok).toBe(true);
+		if (!created.ok) throw new Error("create failed");
+		expect(created.release.sortOrder).toBe(42);
+
+		const versionOnly = await defaultClockService.updateRelease({
+			releaseId: created.release.id,
+			version: "3.0.1",
+			actor: ACTOR,
+		});
+		expect(versionOnly.ok).toBe(true);
+		if (!versionOnly.ok) throw new Error("update failed");
+		expect(versionOnly.release.name).toBe("Explicit order");
+		expect(versionOnly.release.version).toBe("3.0.1");
+
+		const sortOnly = await defaultClockService.updateRelease({
+			releaseId: created.release.id,
+			sortOrder: 0,
+			actor: ACTOR,
+		});
+		expect(sortOnly.ok).toBe(true);
+		if (!sortOnly.ok) throw new Error("update failed");
+		expect(sortOnly.release.sortOrder).toBe(0);
+	});
+
+	test("getReleaseProgress returns NOT_FOUND for unknown release", async () => {
+		const service = makeReleaseService();
+		const missing = await service.getReleaseProgress({ releaseId: crypto.randomUUID() });
+		expect(missing.ok).toBe(false);
+		if (!missing.ok) expect(missing.reason).toBe("NOT_FOUND");
+	});
+
+	test("createRelease rejects empty name or version with validation audit", async () => {
+		const service = makeReleaseService();
+		const empty = await service.createRelease({
+			projectId: projectAId,
+			name: "  ",
+			version: "",
+			actor: ACTOR,
+		});
+		expect(empty.ok).toBe(false);
+		if (!empty.ok) expect(empty.reason).toBe("VALIDATION_FAILED");
+	});
+
+	test("updateRelease rejects missing, archived, empty fields, and uniqueness conflicts", async () => {
+		const service = makeReleaseService();
+		const missing = await service.updateRelease({
+			releaseId: crypto.randomUUID(),
+			name: "x",
+			actor: ACTOR,
+		});
+		expect(missing.ok).toBe(false);
+
+		const a = await service.createRelease({
+			projectId: projectAId,
+			name: "Alpha",
+			version: "1.0.0",
+			actor: ACTOR,
+		});
+		const b = await service.createRelease({
+			projectId: projectAId,
+			name: "Beta",
+			version: "2.0.0",
+			actor: ACTOR,
+		});
+		expect(a.ok && b.ok).toBe(true);
+		if (!a.ok || !b.ok) throw new Error("setup failed");
+
+		const empty = await service.updateRelease({
+			releaseId: a.release.id,
+			name: " ",
+			actor: ACTOR,
+		});
+		expect(empty.ok).toBe(false);
+
+		const conflict = await service.updateRelease({
+			releaseId: b.release.id,
+			name: "Alpha",
+			version: "1.0.0",
+			actor: ACTOR,
+		});
+		expect(conflict.ok).toBe(false);
+		if (!conflict.ok) expect(conflict.reason).toBe("UNIQUENESS_VIOLATION");
+
+		const archived = await service.archiveRelease({ releaseId: a.release.id, actor: ACTOR });
+		expect(archived.ok).toBe(true);
+		const updateArchived = await service.updateRelease({
+			releaseId: a.release.id,
+			name: "Alpha2",
+			actor: ACTOR,
+		});
+		expect(updateArchived.ok).toBe(false);
+		if (!updateArchived.ok) expect(updateArchived.reason).toBe("ALREADY_ARCHIVED");
+
+		const rearchive = await service.archiveRelease({ releaseId: a.release.id, actor: ACTOR });
+		expect(rearchive.ok).toBe(false);
+		if (!rearchive.ok) expect(rearchive.reason).toBe("ALREADY_ARCHIVED");
+
+		const archiveMissing = await service.archiveRelease({
+			releaseId: crypto.randomUUID(),
+			actor: ACTOR,
+		});
+		expect(archiveMissing.ok).toBe(false);
+	});
+
+	test("listReleases returns project-scoped releases", async () => {
+		const service = makeReleaseService();
+		await service.createRelease({
+			projectId: projectAId,
+			name: "List",
+			version: "9.0.0",
+			actor: ACTOR,
+		});
+		const listed = await service.listReleases({ projectId: projectAId });
+		expect(listed.length).toBeGreaterThan(0);
 	});
 });

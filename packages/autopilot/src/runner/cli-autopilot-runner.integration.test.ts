@@ -167,6 +167,35 @@ process.exit(0);
 });
 
 describe("CliAutopilotRunner — pid, progress, notes, analytics, exit", () => {
+	test("an explicit wait timeout retains ownership of the live child", async () => {
+		const root = await tempDir("ap-wait-timeout-");
+		const bin = await tempDir("ap-bin-");
+		const fake = await installFakeAutopilotagent({
+			binDir: bin,
+			behavior: { delayMs: 30_000, mutateTask: false, writeNotesAnalytics: false },
+		});
+		const taskRel = await writeTask(root, "docs/autopilotagent/timeout/timeout.json");
+		const runner = new CliAutopilotRunner({ executablePath: fake });
+		const handle = await runner.start(baseRequest(root, taskRel, fake));
+
+		try {
+			await expect(runner.wait(handle, { timeoutMs: 25 })).rejects.toThrow(
+				/wait timeout after 25ms/i,
+			);
+			expect(await runner.isAlive(handle)).toBe(true);
+
+			await runner.signal(handle, "kill");
+			const result = await runner.wait(handle, { timeoutMs: 5_000 });
+			expect(result.signal).toBe("SIGKILL");
+			expect(result.outcome).toBe("interrupted");
+		} finally {
+			if (await runner.isAlive(handle).catch(() => false)) {
+				await runner.signal(handle, "kill").catch(() => undefined);
+			}
+			await runner.wait(handle, { timeoutMs: 5_000 }).catch(() => undefined);
+		}
+	});
+
 	test("records wrapper PID + start identity; reads sibling run.pid, notes, analytics; maps exit", async () => {
 		const root = await tempDir("ap-life-");
 		await initRepo(root);
@@ -309,6 +338,272 @@ describe("CliAutopilotRunner — pid, progress, notes, analytics, exit", () => {
 		// Progress should not claim success from partial JSON; last valid or diagnostic.
 		expect(result.progress).toBeDefined();
 		expect(result.outcome === "failed" || result.progress.total >= 0).toBe(true);
+	});
+});
+
+describe("CliAutopilotRunner — adapter branch behavior", () => {
+	test("validates traversal, NUL, extension, and invalid task documents", async () => {
+		const root = await tempDir("ap-validation-");
+		const runner = new CliAutopilotRunner();
+		for (const relative of ["../escape.json", "docs/bad\0name.json", "docs/task.md"]) {
+			await expect(runner.validateTask(root, relative)).rejects.toMatchObject({
+				code: "VALIDATION_FAILED",
+			});
+		}
+
+		const invalid = await writeTask(root, "docs/invalid.json", { requirements: "wrong" });
+		const result = await runner.validateTask(root, invalid);
+		expect(result.ok).toBe(false);
+		expect(result.message.length).toBeGreaterThan(0);
+	});
+
+	test("resolves named executables on PATH and rejects missing names and dot paths", async () => {
+		const available = await new CliAutopilotRunner({ executablePath: "bun" }).validateRuntime();
+		expect(available.ok).toBe(true);
+		expect(available.executablePath).toMatch(/bun/);
+
+		const missing = await new CliAutopilotRunner({
+			executablePath: "autopilotagent-definitely-not-on-path",
+		}).validateRuntime();
+		expect(missing.ok).toBe(false);
+		expect(missing.message).toMatch(/PATH/);
+
+		const dotPath = await new CliAutopilotRunner({ executablePath: ".missing" }).validateRuntime();
+		expect(dotPath.ok).toBe(false);
+		expect(dotPath.executablePath).toBe(".missing");
+	});
+
+	test("start rejects unavailable runtimes and roots that cannot contain the relative task", async () => {
+		const missing = new CliAutopilotRunner({
+			executablePath: "autopilotagent-definitely-not-on-path",
+		});
+		await expect(
+			missing.start({
+				projectRoot: process.cwd(),
+				taskRelativePath: "docs/task.json",
+				projectId: "project",
+				featureId: "feature",
+				expectedBranch: "main",
+			}),
+		).rejects.toMatchObject({ code: "ADAPTER_ERROR" });
+
+		const available = new CliAutopilotRunner({ executablePath: "bun" });
+		await expect(
+			available.start({
+				projectRoot: "/",
+				taskRelativePath: "docs/task.json",
+				projectId: "project",
+				featureId: "feature",
+				expectedBranch: "main",
+			}),
+		).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+	});
+
+	test("uses configured executable, filters extra env, waits without a timeout, and caps diagnostics", async () => {
+		const root = await tempDir("ap-options-");
+		const bin = await tempDir("ap-bin-");
+		const capturePath = join(root, "env.json");
+		const fake = join(bin, "autopilotagent");
+		await writeFile(
+			fake,
+			`#!/usr/bin/env bun
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(process.env), "utf8");
+process.stdout.write("x".repeat(400));
+`,
+			"utf8",
+		);
+		await chmod(fake, 0o755);
+		const taskRel = await writeTask(root, "docs/options/options.json");
+		const runner = new CliAutopilotRunner({
+			executablePath: fake,
+			envAllowlist: ["PATH", "ALLOWED_TEST_VALUE"],
+			maxDiagnosticBytes: 16,
+		});
+		const request = baseRequest(root, taskRel, fake, {
+			env: { ALLOWED_TEST_VALUE: "yes", BLOCKED_TEST_VALUE: "no" },
+		});
+		delete (request as Partial<AutopilotStartRequest>).executablePath;
+		const handle = await runner.start(request);
+		const result = await runner.wait(handle);
+		const captured = JSON.parse(await readFile(capturePath, "utf8")) as Record<string, string>;
+		expect(captured.ALLOWED_TEST_VALUE).toBe("yes");
+		expect(captured.BLOCKED_TEST_VALUE).toBeUndefined();
+		expect(result.stdoutDiagnostic.length).toBeLessThan(400);
+	});
+
+	test("rejects invalid wait timeouts before consulting process state", async () => {
+		const identity = await createProcessIdentity(process.pid);
+		const handle = {
+			projectId: "project",
+			featureId: "feature",
+			projectRoot: process.cwd(),
+			taskRelativePath: "docs/task.json",
+			expectedBranch: "main",
+			processIdentity: identity,
+			startedAt: "test",
+		};
+		const runner = new CliAutopilotRunner();
+		for (const timeoutMs of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+			await expect(runner.wait(handle, { timeoutMs })).rejects.toMatchObject({
+				code: "VALIDATION_FAILED",
+			});
+		}
+	});
+
+	test("reports forged and exited handles as not alive and refuses empty ownership", async () => {
+		const identity = await createProcessIdentity(process.pid);
+		const runner = new CliAutopilotRunner();
+		const baseHandle = {
+			projectId: "project",
+			featureId: "feature",
+			projectRoot: process.cwd(),
+			taskRelativePath: "docs/task.json",
+			expectedBranch: "main",
+			processIdentity: identity,
+			startedAt: "test",
+		};
+		expect(await runner.isAlive({ ...baseHandle, projectId: "" })).toBe(false);
+		expect(
+			await runner.isAlive({
+				...baseHandle,
+				processIdentity: { pid: 2_147_483_647, startTimeMs: 1 },
+			}),
+		).toBe(false);
+		await expect(runner.signal({ ...baseHandle, featureId: "" }, "term")).rejects.toMatchObject({
+			code: "ADAPTER_ERROR",
+		});
+	});
+
+	test("supports SIGTERM and restart-style waits after the live child is forgotten", async () => {
+		const root = await tempDir("ap-term-");
+		const bin = await tempDir("ap-bin-");
+		const fake = await installFakeAutopilotagent({
+			binDir: bin,
+			behavior: { delayMs: 30_000, mutateTask: false, writeNotesAnalytics: false },
+		});
+		const taskRel = await writeTask(root, "docs/term/term.json");
+		const runner = new CliAutopilotRunner({ executablePath: fake });
+		const handle = await runner.start(baseRequest(root, taskRel, fake));
+		await runner.signal(handle, "term");
+		const first = await runner.wait(handle, { timeoutMs: 5_000 });
+		expect(first.signal).toBe("SIGTERM");
+		const restarted = await runner.wait(handle, { timeoutMs: 100 });
+		expect(restarted.exitCode).toBeNull();
+	});
+
+	test("restart-style waits poll a live external identity with and without deadlines", async () => {
+		const child = Bun.spawn([process.execPath, "-e", "await Bun.sleep(120)"], {
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		const identity = await createProcessIdentity(child.pid);
+		const handle = {
+			projectId: "project",
+			featureId: "feature",
+			projectRoot: process.cwd(),
+			taskRelativePath: "docs/missing.json",
+			expectedBranch: "main",
+			processIdentity: identity,
+			startedAt: "external",
+		};
+		const runner = new CliAutopilotRunner();
+		await expect(runner.wait(handle, { timeoutMs: 0 })).rejects.toThrow(/wait timeout after 0ms/);
+		const result = await runner.wait(handle);
+		expect(await child.exited).toBe(0);
+		expect(result.exitCode).toBeNull();
+	});
+
+	test("wait falls back to retained and empty progress when a handle path becomes invalid", async () => {
+		const root = await tempDir("ap-progress-fallback-");
+		const bin = await tempDir("ap-bin-");
+		const fake = await installFakeAutopilotagent({
+			binDir: bin,
+			behavior: { mutateTask: false, writeNotesAnalytics: false },
+		});
+		const taskRel = await writeTask(root, "docs/fallback/fallback.json");
+		const runner = new CliAutopilotRunner({ executablePath: fake });
+		const handle = await runner.start(baseRequest(root, taskRel, fake));
+		handle.taskRelativePath = "../invalid.json";
+		const retained = await runner.wait(handle, { timeoutMs: 5_000 });
+		expect(retained.progress.total).toBeGreaterThan(0);
+		const empty = await runner.wait(handle, { timeoutMs: 100 });
+		expect(empty.progress).toMatchObject({ total: 0, passed: 0, allPass: false });
+	});
+
+	test("normalizes Error and non-Error process signaling failures", async () => {
+		const identity = await createProcessIdentity(process.pid);
+		const handle = {
+			projectId: "project",
+			featureId: "feature",
+			projectRoot: process.cwd(),
+			taskRelativePath: "docs/task.json",
+			expectedBranch: "main",
+			processIdentity: identity,
+			startedAt: "test",
+		};
+		const runner = new CliAutopilotRunner();
+		const originalKill = process.kill;
+		try {
+			process.kill = (() => {
+				throw new Error("signal denied");
+			}) as typeof process.kill;
+			await expect(runner.signal(handle, "term")).rejects.toThrow(/signal denied/);
+
+			process.kill = (() => {
+				throw "signal denied as text";
+			}) as typeof process.kill;
+			await expect(runner.signal(handle, "kill")).rejects.toThrow(/signal denied as text/);
+		} finally {
+			process.kill = originalKill;
+		}
+	});
+
+	test("returns empty progress and commits for missing task and branch", async () => {
+		const root = await tempDir("ap-missing-");
+		const runner = new CliAutopilotRunner();
+		const progress = await runner.readProgress(root, "docs/missing.json");
+		expect(progress).toMatchObject({ total: 0, passed: 0, allPass: false });
+
+		const identity = await createProcessIdentity(process.pid);
+		const commits = await runner.observeCommits({
+			projectId: "project",
+			featureId: "feature",
+			projectRoot: root,
+			taskRelativePath: "docs/missing.json",
+			expectedBranch: "branch-that-does-not-exist",
+			processIdentity: identity,
+			startedAt: "test",
+		});
+		expect(commits).toEqual([]);
+	});
+
+	test("loads analytics documents without a summary and ignores empty analytics directories", async () => {
+		for (const [name, analytics, expected] of [
+			["raw", { value: 7 }, { value: 7 }],
+			["empty", null, undefined],
+		] as const) {
+			const root = await tempDir(`ap-analytics-${name}-`);
+			const bin = await tempDir("ap-bin-");
+			const fake = await installFakeAutopilotagent({
+				binDir: bin,
+				behavior: { delayMs: 100, mutateTask: false, writeNotesAnalytics: false },
+			});
+			const taskRel = await writeTask(root, `docs/${name}/${name}.json`);
+			const analyticsDir = join(root, `docs/${name}/analytics`);
+			await mkdir(analyticsDir, { recursive: true });
+			if (analytics) {
+				await writeFile(join(analyticsDir, "session.json"), JSON.stringify(analytics), "utf8");
+			}
+			const runner = new CliAutopilotRunner({ executablePath: fake });
+			const handle = await runner.start(baseRequest(root, taskRel, fake));
+			const result = await runner.wait(handle, { timeoutMs: 5_000 });
+			if (expected) {
+				expect(result.analytics).toMatchObject({ exists: true, summary: expected });
+			} else {
+				expect(result.analytics).toEqual({ exists: false });
+			}
+		}
 	});
 });
 

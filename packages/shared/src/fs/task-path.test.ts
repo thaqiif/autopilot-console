@@ -43,6 +43,18 @@ describe("resolveTaskPath", () => {
 		});
 	});
 
+	test("rejects Windows UNC and NUL-containing paths", async () => {
+		const project = await makeTempDir("task-proj-");
+		await expect(resolveTaskPath(project, "\\\\server\\share\\task.json")).rejects.toMatchObject({
+			code: errorCodes.VALIDATION_FAILED,
+			message: expect.stringMatching(/absolute/i),
+		});
+		await expect(resolveTaskPath(project, "tasks/invalid\0name.json")).rejects.toMatchObject({
+			code: errorCodes.VALIDATION_FAILED,
+			message: expect.stringMatching(/invalid/i),
+		});
+	});
+
 	test("rejects empty paths", async () => {
 		const project = await makeTempDir("task-proj-");
 		await expect(resolveTaskPath(project, "")).rejects.toMatchObject({
@@ -87,6 +99,15 @@ describe("resolveTaskPath", () => {
 			code: errorCodes.VALIDATION_FAILED,
 			message: expect.stringMatching(/exist|missing|not found/i),
 		});
+	});
+
+	test("rejects an inaccessible project root", async () => {
+		await expect(resolveTaskPath("/definitely/missing/project", "task.json")).rejects.toMatchObject(
+			{
+				code: errorCodes.VALIDATION_FAILED,
+				message: expect.stringMatching(/project root/i),
+			},
+		);
 	});
 
 	test("rejects directories even when named *.json", async () => {

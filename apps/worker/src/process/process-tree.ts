@@ -4,13 +4,25 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import type { SignalKind } from "../../../../packages/autopilot/src/index";
 import type { ProcessTreeInspector } from "./cancellation-controller";
 
 // ---------------------------------------------------------------------------
 // PID helpers
 // ---------------------------------------------------------------------------
+
+export interface ProcessTreeDependencies {
+	readFile: typeof readFile;
+	readdir: typeof readdir;
+	kill: typeof process.kill;
+}
+
+const defaultDependencies: ProcessTreeDependencies = {
+	readFile,
+	readdir,
+	kill: process.kill.bind(process),
+};
 
 function signalNumber(kind: SignalKind): number {
 	switch (kind) {
@@ -23,18 +35,21 @@ function signalNumber(kind: SignalKind): number {
 	}
 }
 
-async function pidExists(pid: number): Promise<boolean> {
+async function pidExists(pid: number, dependencies: ProcessTreeDependencies): Promise<boolean> {
 	try {
-		await readFile(`/proc/${pid}/stat`);
+		await dependencies.readFile(`/proc/${pid}/stat`);
 		return true;
 	} catch {
 		return false;
 	}
 }
 
-async function parseProcStatStartTicks(pid: number): Promise<number | null> {
+async function parseProcStatStartTicks(
+	pid: number,
+	dependencies: ProcessTreeDependencies,
+): Promise<number | null> {
 	try {
-		const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+		const stat = await dependencies.readFile(`/proc/${pid}/stat`, "utf8");
 		const close = stat.lastIndexOf(")");
 		if (close < 0) return null;
 		const rest = stat
@@ -58,17 +73,20 @@ const CLK_TCK = (() => {
 	}
 })();
 
-async function bootTimeMs(): Promise<number> {
-	const text = await readFile("/proc/stat", "utf8");
+async function bootTimeMs(dependencies: ProcessTreeDependencies): Promise<number> {
+	const text = await dependencies.readFile("/proc/stat", "utf8");
 	const line = text.split("\n").find((l) => l.startsWith("btime "));
 	if (!line) return 0;
 	return Number(line.slice(6).trim()) * 1000;
 }
 
-async function startTimeMsForPid(pid: number): Promise<number> {
-	const ticks = await parseProcStatStartTicks(pid);
+async function startTimeMsForPid(
+	pid: number,
+	dependencies: ProcessTreeDependencies,
+): Promise<number> {
+	const ticks = await parseProcStatStartTicks(pid, dependencies);
 	if (ticks === null) throw new Error(`cannot parse starttime for pid ${pid}`);
-	const btime = await bootTimeMs();
+	const btime = await bootTimeMs(dependencies);
 	return Math.floor(btime + (ticks * 1000) / CLK_TCK);
 }
 
@@ -76,10 +94,10 @@ async function startTimeMsForPid(pid: number): Promise<number> {
 // Family helpers
 // ---------------------------------------------------------------------------
 
-async function getChildren(pid: number): Promise<number[]> {
+async function getChildren(pid: number, dependencies: ProcessTreeDependencies): Promise<number[]> {
 	try {
 		const childrenDir = `/proc/${pid}/task/${pid}/children`;
-		const text = await readFile(childrenDir, "utf8");
+		const text = await dependencies.readFile(childrenDir, "utf8");
 		return text
 			.trim()
 			.split(/\s+/)
@@ -87,14 +105,13 @@ async function getChildren(pid: number): Promise<number[]> {
 			.filter((n) => n > 0);
 	} catch {
 		// Fallback: scan /proc for PPID match
-		const { readdir } = await import("node:fs/promises");
-		const entries = await readdir("/proc");
+		const entries = await dependencies.readdir("/proc");
 		const children: number[] = [];
 		for (const entry of entries) {
 			const childPid = Number(entry);
 			if (!Number.isInteger(childPid) || childPid <= 0) continue;
 			try {
-				const stat = await readFile(`/proc/${childPid}/stat`, "utf8");
+				const stat = await dependencies.readFile(`/proc/${childPid}/stat`, "utf8");
 				const close = stat.lastIndexOf(")");
 				if (close < 0) continue;
 				const rest = stat
@@ -109,12 +126,16 @@ async function getChildren(pid: number): Promise<number[]> {
 	}
 }
 
-async function getAllDescendants(pid: number): Promise<number[]> {
+async function getAllDescendants(
+	pid: number,
+	dependencies: ProcessTreeDependencies,
+): Promise<number[]> {
 	const result: number[] = [];
 	const queue = [pid];
 	while (queue.length > 0) {
-		const current = queue.shift()!;
-		const children = await getChildren(current);
+		const current = queue.shift();
+		if (current === undefined) continue;
+		const children = await getChildren(current, dependencies);
 		for (const child of children) {
 			if (!result.includes(child) && child !== pid) {
 				result.push(child);
@@ -129,15 +150,18 @@ async function getAllDescendants(pid: number): Promise<number[]> {
 // Real ProcessTreeInspector
 // ---------------------------------------------------------------------------
 
-export function createProcessTreeInspector(): ProcessTreeInspector {
+export function createProcessTreeInspector(
+	overrides: Partial<ProcessTreeDependencies> = {},
+): ProcessTreeInspector {
+	const dependencies: ProcessTreeDependencies = { ...defaultDependencies, ...overrides };
 	return {
 		async getDescendants(pid: number): Promise<number[]> {
-			return getAllDescendants(pid);
+			return getAllDescendants(pid, dependencies);
 		},
 
 		async verifyIdentity(pid: number, expectedStartTimeMs: number): Promise<boolean> {
 			try {
-				const current = await startTimeMsForPid(pid);
+				const current = await startTimeMsForPid(pid, dependencies);
 				return Math.abs(current - expectedStartTimeMs) <= 20;
 			} catch {
 				return false;
@@ -145,11 +169,11 @@ export function createProcessTreeInspector(): ProcessTreeInspector {
 		},
 
 		async signal(pid: number, kind: SignalKind): Promise<void> {
-			const exists = await pidExists(pid);
+			const exists = await pidExists(pid, dependencies);
 			if (!exists) return;
 			const sig = signalNumber(kind);
 			try {
-				process.kill(pid, sig);
+				dependencies.kill(pid, sig);
 			} catch (error: unknown) {
 				const err = error as NodeJS.ErrnoException;
 				// ESRCH = process vanished — not an error for our purposes
