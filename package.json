@@ -9,7 +9,7 @@
 	"scripts": {
 		"test": "bun run --filter '*' --sequential test && bun test tests scripts",
 		"test:integration": "bun test **/*.integration.test.ts",
-		"typecheck": "bun run --filter '*' typecheck",
+		"typecheck": "bun run --filter '*' --sequential typecheck",
 		"lint": "biome check .",
 		"coverage": "bun test --coverage",
 		"coverage:critical": "bun run scripts/check-critical-coverage.ts",
