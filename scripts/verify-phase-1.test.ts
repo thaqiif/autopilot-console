@@ -62,6 +62,13 @@ describe("skip detection", () => {
 });
 
 describe("assertQualificationScriptContract", () => {
+	test("runs workspace typechecks sequentially on the supported single-server profile", () => {
+		const packageJson = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
+			scripts?: Record<string, string>;
+		};
+		expect(packageJson.scripts?.typecheck).toContain("--sequential");
+	});
+
 	test("passes for the repository root", () => {
 		const result = assertQualificationScriptContract(ROOT);
 		expect(result.ok).toBe(true);
