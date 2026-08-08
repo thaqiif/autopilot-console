@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	assertDocumentationAlignment,
@@ -68,6 +68,18 @@ describe("assertQualificationScriptContract", () => {
 		expect(result.scriptBody).toMatch(/verify-phase-1/);
 	});
 
+	test("requires the installed CLI contract and never kills an occupied browser port", () => {
+		const source = readFileSync(join(ROOT, "scripts/verify-phase-1.ts"), "utf8");
+		const installedContract = readFileSync(
+			join(ROOT, "packages/autopilot/src/runner/installed-cli.contract.ts"),
+			"utf8",
+		);
+
+		expect(source).toContain("packages/autopilot/src/runner/installed-cli.contract.ts");
+		expect(source).not.toMatch(/fuser\s+-k|kill.*5173/i);
+		expect(installedContract).not.toMatch(/AUTOPILOT_INSTALLED_CLI_TEST|opt-in/i);
+	});
+
 	test("fails when verify:phase-1 is absent", () => {
 		const tmp = join(ROOT, "coverage", "req-48-contract-absent");
 		rmSync(tmp, { recursive: true, force: true });
@@ -106,6 +118,40 @@ describe("assertDocumentationAlignment", () => {
 });
 
 describe("runPhase1Qualification fail-closed behavior", () => {
+	test("dependency gate fails before suites when Docker daemon is unavailable", async () => {
+		const calls: string[] = [];
+		const spawn = async (cmd: string[]): Promise<SpawnResult> => {
+			const joined = cmd.join(" ");
+			calls.push(joined);
+			if (joined.includes("command -v docker")) {
+				return { exitCode: 0, stdout: "/usr/bin/docker\n", stderr: "" };
+			}
+			if (joined.includes("compose version")) {
+				return { exitCode: 0, stdout: "Docker Compose version v5.3.1\n", stderr: "" };
+			}
+			if (joined.startsWith("docker info --format")) {
+				return { exitCode: 1, stdout: "", stderr: "Cannot connect to the Docker daemon" };
+			}
+			if (joined.includes("select 1") || joined.includes("postgres")) {
+				return { exitCode: 0, stdout: "postgres-ok\n", stderr: "" };
+			}
+			return { exitCode: 0, stdout: "ok\n", stderr: "" };
+		};
+
+		const summary = await runPhase1Qualification({
+			root: ROOT,
+			spawn,
+			failFast: true,
+			env: { DATABASE_URL: "postgres://postgres:postgres@127.0.0.1:5432/autopilot_console" },
+		});
+
+		expect(summary.ok).toBe(false);
+		expect(summary.dependencies.docker?.ok).toBe(false);
+		expect(summary.gates).toHaveLength(1);
+		expect(summary.gates[0]?.name).toBe("dependencies");
+		expect(calls.some((call) => call.includes("typecheck"))).toBe(false);
+	});
+
 	test("staticOnly succeeds when contracts are satisfied", async () => {
 		const summary = await runPhase1Qualification({ staticOnly: true, root: ROOT });
 		expect(summary.ok).toBe(true);
@@ -238,7 +284,7 @@ describe("runPhase1Qualification fail-closed behavior", () => {
 			if (joined.includes("select 1") || joined.includes("postgres")) {
 				return { exitCode: 0, stdout: "postgres-ok\n", stderr: "" };
 			}
-			if (joined.includes("docker info")) {
+			if (joined === "docker info") {
 				return {
 					exitCode: 1,
 					stdout: "",
@@ -299,7 +345,7 @@ describe("runPhase1Qualification fail-closed behavior", () => {
 			if (joined.includes("select 1") || joined.includes("postgres")) {
 				return { exitCode: 0, stdout: "postgres-ok\n", stderr: "" };
 			}
-			if (joined.includes("docker info")) {
+			if (joined === "docker info") {
 				return { exitCode: 1, stdout: "", stderr: "daemon down\n" };
 			}
 			if (joined.includes("--print")) {
@@ -330,7 +376,9 @@ describe("runComposeStackQualification", () => {
 				return {
 					exitCode: 0,
 					stdout: ["postgres", "migrate", "api", "worker", "web"]
-						.map((service) => JSON.stringify({ Service: service, Health: "healthy", State: "running" }))
+						.map((service) =>
+							JSON.stringify({ Service: service, Health: "healthy", State: "running" }),
+						)
 						.join("\n"),
 					stderr: "",
 				};
@@ -344,9 +392,7 @@ describe("runComposeStackQualification", () => {
 
 		expect(result.compose.ok).toBe(true);
 		expect(result.deployment.ok).toBe(true);
-		expect(calls).toContain(
-			"docker compose down --volumes --remove-orphans --timeout 10",
-		);
+		expect(calls).toContain("docker compose down --volumes --remove-orphans --timeout 10");
 		expect(calls).toContain("docker compose up -d --wait --wait-timeout 120");
 		expect(calls.some((call) => call.includes("pg_dump") && call.includes("psql"))).toBe(true);
 		expect(calls.at(-1)).toBe("docker compose down --volumes --remove-orphans --timeout 10");
