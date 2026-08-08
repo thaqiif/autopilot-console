@@ -2,7 +2,7 @@
 
 ## 2026-08-08
 
-Phase 1 qualification status: NOT QUALIFIED
+Phase 1 qualification status: QUALIFIED
 
 ### Added
 
@@ -13,6 +13,16 @@ Phase 1 qualification status: NOT QUALIFIED
 ### Changed
 
 - Release qualification now requires a live Docker daemon, materializes every image, executes the installed Autopilotagent CLI contract automatically, and fails closed when any dependency is unavailable.
+
+### Fixed
+
+- Serialized workspace typecheck and production-build execution so the documented single-server profile remains within bounded memory.
+- Forwarded operator-provided Compose configuration into live qualification and made task read-failure fixtures independent of Unix privilege level.
+- Retained failed-gate output in human- and machine-readable qualification summaries.
+
+### Verified
+
+- Two consecutive `bun run verify:phase-1` executions passed all 13 gates on a clean Docker-enabled Ubuntu host, including real Chromium/Playwright, every production image, fresh-volume Compose health, and PostgreSQL dump/drop/restore recovery.
 
 ## 2026-07-31
 

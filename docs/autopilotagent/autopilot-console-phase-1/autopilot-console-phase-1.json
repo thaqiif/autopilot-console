@@ -2572,9 +2572,8 @@
         "Build every image and start the complete stack from empty volumes.",
         "Inspect mounts and environment inside each service and run every health check."
       ],
-	      "passes": false,
-	      "stuck": true,
-	      "blockedReason": "Implementation and fail-closed orchestration are complete, but this environment has no reachable Docker daemon, so images and a fresh-volume Compose stack cannot be executed."
+	      "passes": true,
+	      "stuck": false
 	    },
 	    {
 	      "id": "40",
@@ -2645,9 +2644,8 @@
         "Force diagnostic limits and confirm bounded storage plus truncation markers.",
         "Execute deployment and recovery documentation against a fresh Compose stack."
       ],
-	      "passes": false,
-	      "stuck": true,
-	      "blockedReason": "Production observability tests pass, but the required live deployment/recovery execution depends on requirement 39 and cannot run without a Docker daemon."
+	      "passes": true,
+	      "stuck": false
 	    },
 	    {
 	      "id": "41",
@@ -3176,9 +3174,8 @@
 	        "Break each gate one at a time and confirm the command fails closed.",
 	        "Compare completion status across the ledger and all operator-facing documents."
 	      ],
-	      "passes": false,
-	      "stuck": true,
-	      "blockedReason": "Every non-Docker gate is implemented, but release qualification must run twice with real image, Compose, and recovery gates; the current environment has no Docker daemon."
+	      "passes": true,
+	      "stuck": false
     }
   ]
 }

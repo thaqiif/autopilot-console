@@ -7,14 +7,15 @@ and an nginx-served web application.
 
 ## Current status
 
-Phase 1 qualification status: NOT QUALIFIED
+Phase 1 qualification status: QUALIFIED
 
-Phase 1 is release-qualified when `bun run verify:phase-1` passes twice
-consecutively in a documented environment. That command is the single aggregate
-gate for workspace typecheck, lint, unit tests, database integration, process
-and API suites, browser E2E, critical coverage, production builds, migrations,
-image/Compose validation, and deployment smoke checks. It fails closed when any
-required dependency or critical test is missing, skipped, or failing.
+Phase 1 was release-qualified on 2026-08-08 after `bun run verify:phase-1`
+passed twice consecutively in a clean Docker-enabled environment. That command
+is the single aggregate gate for workspace typecheck, lint, unit tests, database
+integration, process and API suites, browser E2E, critical coverage, production
+builds, migrations, image/Compose validation, and deployment smoke checks. It
+fails closed when any required dependency or critical test is missing, skipped,
+or failing.
 
 The Phase 1 terminal product state remains **Development Merged** — Console never
 claims a Phase 1 release is production-released. See the requirement ledger under

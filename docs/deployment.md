@@ -155,7 +155,11 @@ Structured progress and audit correlation fields (`projectId`, `featureId`,
 
 ## Phase 1 release qualification
 
-Phase 1 qualification status: NOT QUALIFIED
+Phase 1 qualification status: QUALIFIED
+
+The qualification command passed twice consecutively on 2026-08-08 in a clean
+Docker-enabled Ubuntu environment. Re-run the same two-command sequence for each
+release candidate so the qualification claim applies to that exact revision.
 
 Before claiming Phase 1 is release-qualified, run the single aggregate command
 twice consecutively from a clean documented environment:

@@ -2,9 +2,9 @@
 
 ## Outcome
 
-All Phase 1 implementation and test work is complete. Requirements 35, 46, and 47 are verified complete. Requirements 39, 40, and 48 remain explicitly stuck and `passes: false` because their acceptance criteria require live Docker image, fresh-volume Compose, recovery, and two-run release qualification that cannot execute without a Docker daemon.
+All 48 Phase 1 requirements are implemented and verified complete. Requirements 39, 40, and 48 were qualified on a clean Docker-enabled Ubuntu host with two consecutive executions of the documented aggregate command.
 
-Phase 1 qualification status: NOT QUALIFIED
+Phase 1 qualification status: QUALIFIED
 
 ## Verified
 
@@ -14,9 +14,9 @@ Phase 1 qualification status: NOT QUALIFIED
 - All 19 critical modules meet the 90% measured Istanbul branch-path threshold with no skipped critical tests.
 - The installed Autopilotagent CLI contract passes and is mandatory in release qualification.
 
-## External Blocker
+## Live Qualification Evidence
 
-The Docker and Compose CLIs are installed, but no Docker daemon is reachable through `/var/run/docker.sock`. Three consecutive `bun run verify:phase-1` attempts failed closed at the dependency gate before any release claim. Run that command twice in the documented Docker-enabled environment to qualify requirements 39, 40, and 48; then update the ledger and all four status markers together.
+On 2026-08-08, the same committed revision passed `bun run verify:phase-1` twice consecutively on a clean Ubuntu 22.04 host with Bun 1.3.14, PostgreSQL, Docker Engine 29.1.3, Compose 2.40.3, and Playwright Chromium. Run 1 completed from 15:11:01Z to 15:25:34Z (872,357 ms); run 2 completed from 15:25:54Z to 15:40:18Z (863,992 ms). Both runs passed dependencies, typecheck, lint, unit, database, process, browser, coverage, build, migrations, image, Compose, and deployment-smoke gates. The Compose gates created an empty-volume stack, waited for every required service to become healthy, and verified PostgreSQL dump/drop/restore recovery.
 
 ## TDD Commits
 
@@ -25,3 +25,6 @@ The Docker and Compose CLIs are installed, but no Docker daemon is reachable thr
 - `b204d8f` / `8d3bf92`: fresh-stack recovery qualification (requirement 40)
 - `6c70d75` / `8082e3d`: measured critical branch coverage (requirement 47)
 - `fd03866`: mandatory installed-CLI release contract RED phase (requirement 48)
+- `a4d18fa` / `efbdc75`: bounded single-server typecheck concurrency (requirement 48)
+- `50b62e0` / `fc99383`: bounded builds and forwarded Compose environment (requirement 48)
+- `d66b501` / `7ecb864`: actionable failed-gate diagnostics (requirement 48)

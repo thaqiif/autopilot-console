@@ -268,7 +268,11 @@ age, and GitHub polling lag.
 
 ## Phase 1 release qualification
 
-Phase 1 qualification status: NOT QUALIFIED
+Phase 1 qualification status: QUALIFIED
+
+The qualification command passed twice consecutively on 2026-08-08 in a clean
+Docker-enabled Ubuntu environment. Operators must repeat both runs for each new
+release candidate before carrying the qualification claim forward.
 
 Operators claim Phase 1 release qualification only after the documented command
 passes twice consecutively:

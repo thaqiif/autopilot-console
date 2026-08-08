@@ -127,7 +127,7 @@ describe("assertDocumentationAlignment", () => {
 			"CHANGELOG.md",
 		]) {
 			const body = readFileSync(join(ROOT, relativePath), "utf8");
-			expect(body).toContain("Phase 1 qualification status: NOT QUALIFIED");
+			expect(body).toContain("Phase 1 qualification status: QUALIFIED");
 		}
 	});
 
